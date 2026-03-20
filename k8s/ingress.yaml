@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: users-api
+  namespace: __NAMESPACE__
+  annotations:
+    cert-manager.io/cluster-issuer: __CLUSTER_ISSUER_NAME__
+spec:
+  ingressClassName: __INGRESS_CLASS__
+  tls:
+  - hosts:
+    - __INGRESS_HOST__
+    secretName: __TLS_SECRET_NAME__
+  rules:
+  - host: __INGRESS_HOST__
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: users-api
+            port:
+              number: 80
