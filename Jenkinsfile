@@ -53,6 +53,18 @@ pipeline {
 
         stage('Azure Login') {
             steps {
+                script {
+                    def requiredParams = [
+                        'ACR_LOGIN_SERVER': params.ACR_LOGIN_SERVER,
+                        'AKS_RESOURCE_GROUP': params.AKS_RESOURCE_GROUP,
+                        'AKS_CLUSTER_NAME': params.AKS_CLUSTER_NAME,
+                        'K8S_NAMESPACE'    : params.K8S_NAMESPACE
+                    ]
+                    def missingParams = requiredParams.findAll { key, value -> !value?.trim() }.keySet()
+                    if (!missingParams.isEmpty()) {
+                        error("Missing required Jenkins parameters: ${missingParams.join(', ')}. Re-open 'Build with Parameters' and fill them in.")
+                    }
+                }
                 sh '''
                   az login --service-principal \
                     --username "$AZURE_SP_USR" \
