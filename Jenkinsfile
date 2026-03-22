@@ -7,19 +7,19 @@ pipeline {
     }
 
     parameters {
-        string(name: 'ACR_NAME', defaultValue: 'your-acr-name', description: 'Azure Container Registry name (without domain)')
-        string(name: 'ACR_LOGIN_SERVER', defaultValue: 'your-acr-name.azurecr.io', description: 'ACR login server')
+        string(name: 'ACR_NAME', defaultValue: 'usersapiacr1', description: 'Azure Container Registry name; full login server is also accepted')
+        string(name: 'ACR_LOGIN_SERVER', defaultValue: 'usersapiacr1.azurecr.io', description: 'ACR login server')
         string(name: 'IMAGE_REPO', defaultValue: 'users-api', description: 'Repository name in ACR')
-        string(name: 'AKS_RESOURCE_GROUP', defaultValue: 'your-rg', description: 'Resource group containing AKS')
-        string(name: 'AKS_CLUSTER_NAME', defaultValue: 'your-aks', description: 'AKS cluster name')
+        string(name: 'AKS_RESOURCE_GROUP', defaultValue: 'rg-users-api', description: 'Resource group containing AKS')
+        string(name: 'AKS_CLUSTER_NAME', defaultValue: 'aks-users-api', description: 'AKS cluster name')
         string(name: 'K8S_NAMESPACE', defaultValue: 'users-api', description: 'Kubernetes namespace')
-        booleanParam(name: 'ENABLE_INGRESS_TLS', defaultValue: true, description: 'Enable public HTTPS endpoint via Ingress + cert-manager')
-        booleanParam(name: 'INSTALL_INGRESS_STACK', defaultValue: true, description: 'Install/update ingress-nginx and cert-manager')
-        string(name: 'INGRESS_HOST', defaultValue: 'api.example.com', description: 'Public DNS host for this API')
+        booleanParam(name: 'ENABLE_INGRESS_TLS', defaultValue: false, description: 'Enable public HTTPS endpoint via Ingress + cert-manager')
+        booleanParam(name: 'INSTALL_INGRESS_STACK', defaultValue: false, description: 'Install/update ingress-nginx and cert-manager')
+        string(name: 'INGRESS_HOST', defaultValue: '', description: 'Public DNS host for this API')
         string(name: 'INGRESS_CLASS', defaultValue: 'nginx', description: 'Ingress class name')
         string(name: 'TLS_SECRET_NAME', defaultValue: 'users-api-tls', description: 'TLS secret name in app namespace')
         string(name: 'CLUSTER_ISSUER_NAME', defaultValue: 'letsencrypt-prod', description: 'cert-manager ClusterIssuer name')
-        string(name: 'LETSENCRYPT_EMAIL', defaultValue: 'devops@example.com', description: 'Email used by ACME account')
+        string(name: 'LETSENCRYPT_EMAIL', defaultValue: '', description: 'Email used by ACME account')
         string(name: 'ACME_SERVER', defaultValue: 'https://acme-v02.api.letsencrypt.org/directory', description: 'ACME server URL')
         string(name: 'INGRESS_NGINX_MANIFEST_URL', defaultValue: 'https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml', description: 'ingress-nginx install manifest URL')
         string(name: 'CERT_MANAGER_MANIFEST_URL', defaultValue: 'https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml', description: 'cert-manager install manifest URL')
@@ -66,12 +66,21 @@ pipeline {
         stage('Build and Push Image') {
             steps {
                 script {
+                    def normalizedAcrName = params.ACR_NAME.trim().toLowerCase()
+                    if (normalizedAcrName.endsWith('.azurecr.io')) {
+                        normalizedAcrName = normalizedAcrName.replaceFirst(/\.azurecr\.io$/, '')
+                    }
+                    if (!(normalizedAcrName ==~ /[a-z0-9]{5,50}/)) {
+                        error("ACR_NAME must resolve to 5-50 lowercase alphanumeric characters. Received: '${params.ACR_NAME}'")
+                    }
+
                     def shortSha = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
                     env.IMAGE_TAG = "${env.BUILD_NUMBER}-${shortSha}"
+                    env.ACR_NAME_NORMALIZED = normalizedAcrName
                     env.FULL_IMAGE = "${params.ACR_LOGIN_SERVER}/${params.IMAGE_REPO}:${env.IMAGE_TAG}"
                 }
                 sh '''
-                  az acr login --name "$ACR_NAME"
+                  az acr login --name "$ACR_NAME_NORMALIZED"
                   docker build -t "$FULL_IMAGE" .
                   docker push "$FULL_IMAGE"
                 '''
