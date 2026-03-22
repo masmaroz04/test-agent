@@ -95,7 +95,7 @@ pipeline {
                   az acr login --name "$ACR_NAME_NORMALIZED"
                   docker buildx create --use --name jenkins-builder >/dev/null 2>&1 || docker buildx use jenkins-builder
                   docker buildx inspect --bootstrap
-                  docker buildx build --platform linux/amd64 --provenance=false -t "$FULL_IMAGE" --push .
+                  docker buildx build --platform linux/arm64 --provenance=false -t "$FULL_IMAGE" --push .
                 '''
             }
         }
