@@ -29,20 +29,6 @@ pipeline {
         AZURE_SP = credentials('azure-sp')
         AZURE_TENANT_ID = credentials('azure-tenant-id')
         AZURE_SUBSCRIPTION_ID = credentials('azure-subscription-id')
-        ACR_NAME_ENV = "${params.ACR_NAME}"
-        ACR_LOGIN_SERVER_ENV = "${params.ACR_LOGIN_SERVER}"
-        IMAGE_REPO_ENV = "${params.IMAGE_REPO}"
-        AKS_RESOURCE_GROUP_ENV = "${params.AKS_RESOURCE_GROUP}"
-        AKS_CLUSTER_NAME_ENV = "${params.AKS_CLUSTER_NAME}"
-        K8S_NAMESPACE_ENV = "${params.K8S_NAMESPACE}"
-        INGRESS_HOST_ENV = "${params.INGRESS_HOST}"
-        INGRESS_CLASS_ENV = "${params.INGRESS_CLASS}"
-        TLS_SECRET_NAME_ENV = "${params.TLS_SECRET_NAME}"
-        CLUSTER_ISSUER_NAME_ENV = "${params.CLUSTER_ISSUER_NAME}"
-        LETSENCRYPT_EMAIL_ENV = "${params.LETSENCRYPT_EMAIL}"
-        ACME_SERVER_ENV = "${params.ACME_SERVER}"
-        INGRESS_NGINX_MANIFEST_URL_ENV = "${params.INGRESS_NGINX_MANIFEST_URL}"
-        CERT_MANAGER_MANIFEST_URL_ENV = "${params.CERT_MANAGER_MANIFEST_URL}"
     }
 
     stages {
@@ -69,10 +55,10 @@ pipeline {
             steps {
                 script {
                     def requiredParams = [
-                        'ACR_LOGIN_SERVER': env.ACR_LOGIN_SERVER_ENV,
-                        'AKS_RESOURCE_GROUP': env.AKS_RESOURCE_GROUP_ENV,
-                        'AKS_CLUSTER_NAME': env.AKS_CLUSTER_NAME_ENV,
-                        'K8S_NAMESPACE': env.K8S_NAMESPACE_ENV
+                        'ACR_LOGIN_SERVER': params.ACR_LOGIN_SERVER,
+                        'AKS_RESOURCE_GROUP': params.AKS_RESOURCE_GROUP,
+                        'AKS_CLUSTER_NAME': params.AKS_CLUSTER_NAME,
+                        'K8S_NAMESPACE': params.K8S_NAMESPACE
                     ]
                     def missingParams = requiredParams.findAll { key, value -> !value?.trim() }.keySet()
                     if (!missingParams.isEmpty()) {
@@ -92,18 +78,18 @@ pipeline {
         stage('Build and Push Image') {
             steps {
                 script {
-                    def normalizedAcrName = env.ACR_NAME_ENV.trim().toLowerCase()
+                    def normalizedAcrName = params.ACR_NAME.trim().toLowerCase()
                     if (normalizedAcrName.endsWith('.azurecr.io')) {
                         normalizedAcrName = normalizedAcrName.replaceFirst(/\.azurecr\.io$/, '')
                     }
                     if (!(normalizedAcrName ==~ /[a-z0-9]{5,50}/)) {
-                        error("ACR_NAME must resolve to 5-50 lowercase alphanumeric characters. Received: '${env.ACR_NAME_ENV}'")
+                        error("ACR_NAME must resolve to 5-50 lowercase alphanumeric characters. Received: '${params.ACR_NAME}'")
                     }
 
                     def shortSha = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
                     env.IMAGE_TAG = "${env.BUILD_NUMBER}-${shortSha}"
                     env.ACR_NAME_NORMALIZED = normalizedAcrName
-                    env.FULL_IMAGE = "${env.ACR_LOGIN_SERVER_ENV}/${env.IMAGE_REPO_ENV}:${env.IMAGE_TAG}"
+                    env.FULL_IMAGE = "${params.ACR_LOGIN_SERVER}/${params.IMAGE_REPO}:${env.IMAGE_TAG}"
                 }
                 sh '''
                   az acr login --name "$ACR_NAME_NORMALIZED"
@@ -115,20 +101,21 @@ pipeline {
 
         stage('Deploy Workload to AKS') {
             steps {
-                sh '''
+                echo "Deploying to AKS resource group '${params.AKS_RESOURCE_GROUP}', cluster '${params.AKS_CLUSTER_NAME}', namespace '${params.K8S_NAMESPACE}'"
+                sh """
                   set -e
                   az aks get-credentials \
-                    --resource-group "$AKS_RESOURCE_GROUP_ENV" \
-                    --name "$AKS_CLUSTER_NAME_ENV" \
+                    --resource-group "${params.AKS_RESOURCE_GROUP}" \
+                    --name "${params.AKS_CLUSTER_NAME}" \
                     --overwrite-existing
 
-                  sed "s|__NAMESPACE__|$K8S_NAMESPACE_ENV|g" k8s/namespace.yaml | kubectl apply -f -
-                  sed "s|__NAMESPACE__|$K8S_NAMESPACE_ENV|g; s|__IMAGE__|$FULL_IMAGE|g" k8s/deployment.yaml | kubectl apply -f -
-                  sed "s|__NAMESPACE__|$K8S_NAMESPACE_ENV|g" k8s/service.yaml | kubectl apply -f -
+                  sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g" k8s/namespace.yaml | kubectl apply -f -
+                  sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g; s|__IMAGE__|$FULL_IMAGE|g" k8s/deployment.yaml | kubectl apply -f -
+                  sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g" k8s/service.yaml | kubectl apply -f -
 
-                  kubectl -n "$K8S_NAMESPACE_ENV" rollout status deployment/users-api --timeout=180s
-                  kubectl -n "$K8S_NAMESPACE_ENV" get svc users-api -o wide
-                '''
+                  kubectl -n "${params.K8S_NAMESPACE}" rollout status deployment/users-api --timeout=180s
+                  kubectl -n "${params.K8S_NAMESPACE}" get svc users-api -o wide
+                """
             }
         }
 
@@ -137,16 +124,16 @@ pipeline {
                 expression { return params.INSTALL_INGRESS_STACK }
             }
             steps {
-                sh '''
+                sh """
                   set -e
-                  kubectl apply -f "$INGRESS_NGINX_MANIFEST_URL_ENV"
+                  kubectl apply -f "${params.INGRESS_NGINX_MANIFEST_URL}"
                   kubectl -n ingress-nginx rollout status deployment/ingress-nginx-controller --timeout=300s
 
-                  kubectl apply -f "$CERT_MANAGER_MANIFEST_URL_ENV"
+                  kubectl apply -f "${params.CERT_MANAGER_MANIFEST_URL}"
                   kubectl -n cert-manager rollout status deployment/cert-manager --timeout=300s
                   kubectl -n cert-manager rollout status deployment/cert-manager-webhook --timeout=300s
                   kubectl -n cert-manager rollout status deployment/cert-manager-cainjector --timeout=300s
-                '''
+                """
             }
         }
 
@@ -155,20 +142,20 @@ pipeline {
                 expression { return params.ENABLE_INGRESS_TLS }
             }
             steps {
-                sh '''
+                sh """
                   set -e
-                  if [ -z "$INGRESS_HOST_ENV" ] || [ -z "$LETSENCRYPT_EMAIL_ENV" ]; then
+                  if [ -z "${params.INGRESS_HOST}" ] || [ -z "${params.LETSENCRYPT_EMAIL}" ]; then
                     echo "INGRESS_HOST and LETSENCRYPT_EMAIL are required when ENABLE_INGRESS_TLS=true"
                     exit 1
                   fi
 
-                  sed "s|__CLUSTER_ISSUER_NAME__|$CLUSTER_ISSUER_NAME_ENV|g; s|__ACME_SERVER__|$ACME_SERVER_ENV|g; s|__ACME_EMAIL__|$LETSENCRYPT_EMAIL_ENV|g; s|__INGRESS_CLASS__|$INGRESS_CLASS_ENV|g" k8s/cluster-issuer.yaml | kubectl apply -f -
-                  sed "s|__NAMESPACE__|$K8S_NAMESPACE_ENV|g; s|__CLUSTER_ISSUER_NAME__|$CLUSTER_ISSUER_NAME_ENV|g; s|__INGRESS_CLASS__|$INGRESS_CLASS_ENV|g; s|__INGRESS_HOST__|$INGRESS_HOST_ENV|g; s|__TLS_SECRET_NAME__|$TLS_SECRET_NAME_ENV|g" k8s/ingress.yaml | kubectl apply -f -
+                  sed "s|__CLUSTER_ISSUER_NAME__|${params.CLUSTER_ISSUER_NAME}|g; s|__ACME_SERVER__|${params.ACME_SERVER}|g; s|__ACME_EMAIL__|${params.LETSENCRYPT_EMAIL}|g; s|__INGRESS_CLASS__|${params.INGRESS_CLASS}|g" k8s/cluster-issuer.yaml | kubectl apply -f -
+                  sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g; s|__CLUSTER_ISSUER_NAME__|${params.CLUSTER_ISSUER_NAME}|g; s|__INGRESS_CLASS__|${params.INGRESS_CLASS}|g; s|__INGRESS_HOST__|${params.INGRESS_HOST}|g; s|__TLS_SECRET_NAME__|${params.TLS_SECRET_NAME}|g" k8s/ingress.yaml | kubectl apply -f -
 
-                  kubectl -n "$K8S_NAMESPACE_ENV" get ingress users-api -o wide
-                  kubectl -n "$K8S_NAMESPACE_ENV" get certificate || true
+                  kubectl -n "${params.K8S_NAMESPACE}" get ingress users-api -o wide
+                  kubectl -n "${params.K8S_NAMESPACE}" get certificate || true
                   kubectl -n ingress-nginx get svc ingress-nginx-controller -o wide
-                '''
+                """
             }
         }
     }
