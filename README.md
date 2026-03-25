@@ -1,107 +1,165 @@
-# Users API Azure Setup Guide
+# Users API — Zero to Production Guide
 
-คู่มือนี้อธิบายการเตรียม Azure, Jenkins, Jenkins agent VM, สิทธิ์ที่ต้องใช้, และวิธี deploy โปรเจกต์นี้ตั้งแต่ต้นจนจบ โดยอ้างอิงค่าจริงใน repo ปัจจุบัน
+คู่มือนี้อธิบายทุกขั้นตอนตั้งแต่เริ่มต้นจนถึง production สำหรับโปรเจกต์ Spring Boot Users API ที่ deploy บน Azure Kubernetes Service ผ่าน Jenkins CI/CD
+
+---
+
+## สารบัญ
+
+1. [โปรเจกต์นี้คืออะไร](#1-โปรเจกต์นี้คืออะไร)
+2. [ภาพรวมสถาปัตยกรรม](#2-ภาพรวมสถาปัตยกรรม)
+3. [ค่าหลักของระบบ](#3-ค่าหลักของระบบ)
+4. [สิ่งที่ต้องเตรียมก่อน](#4-สิ่งที่ต้องเตรียมก่อน)
+5. [ขั้นตอนที่ 1 — สร้าง Azure Resource Group](#5-ขั้นตอนที่-1--สร้าง-azure-resource-group)
+6. [ขั้นตอนที่ 2 — สร้าง Azure Container Registry](#6-ขั้นตอนที่-2--สร้าง-azure-container-registry)
+7. [ขั้นตอนที่ 3 — สร้าง Azure Kubernetes Service](#7-ขั้นตอนที่-3--สร้าง-azure-kubernetes-service)
+8. [ขั้นตอนที่ 4 — สร้าง Jenkins Agent VM](#8-ขั้นตอนที่-4--สร้าง-jenkins-agent-vm)
+9. [ขั้นตอนที่ 5 — สร้าง App Registration และ Service Principal](#9-ขั้นตอนที่-5--สร้าง-app-registration-และ-service-principal)
+10. [ขั้นตอนที่ 6 — กำหนด Role ให้ Service Principal](#10-ขั้นตอนที่-6--กำหนด-role-ให้-service-principal)
+11. [ขั้นตอนที่ 7 — ติดตั้ง Jenkins Controller](#11-ขั้นตอนที่-7--ติดตั้ง-jenkins-controller)
+12. [ขั้นตอนที่ 8 — ติดตั้งเครื่องมือบน Jenkins Agent VM](#12-ขั้นตอนที่-8--ติดตั้งเครื่องมือบน-jenkins-agent-vm)
+13. [ขั้นตอนที่ 9 — ผูก Agent VM เข้า Jenkins](#13-ขั้นตอนที่-9--ผูก-agent-vm-เข้า-jenkins)
+14. [ขั้นตอนที่ 10 — สร้าง Jenkins Credentials](#14-ขั้นตอนที่-10--สร้าง-jenkins-credentials)
+15. [ขั้นตอนที่ 11 — สร้าง Jenkins Pipeline Job](#15-ขั้นตอนที่-11--สร้าง-jenkins-pipeline-job)
+16. [ขั้นตอนที่ 12 — Deploy ครั้งแรก](#16-ขั้นตอนที่-12--deploy-ครั้งแรก)
+17. [เช็กหลัง Deploy](#17-เช็กหลัง-deploy)
+18. [ทดสอบ API](#18-ทดสอบ-api)
+19. [เปิด HTTPS (ตัวเลือกเสริม)](#19-เปิด-https-ตัวเลือกเสริม)
+20. [ปัญหาที่เจอบ่อยและวิธีแก้](#20-ปัญหาที่เจอบ่อยและวิธีแก้)
+21. [คำสั่งที่ใช้บ่อย](#21-คำสั่งที่ใช้บ่อย)
+
+---
 
 ## 1. โปรเจกต์นี้คืออะไร
 
-โปรเจกต์นี้เป็น Spring Boot REST API สำหรับ `users`
+โปรเจกต์นี้เป็น **Spring Boot REST API** สำหรับ `users` พร้อม CI/CD pipeline ครบวงจร
 
-สิ่งที่ pipeline ทำคือ:
+**Stack หลัก:**
 
-1. Jenkins checkout source
-2. รัน test และ package
-3. สร้าง Docker image
-4. push image ไป Azure Container Registry
-5. deploy image ไป Azure Kubernetes Service
-6. expose app ผ่าน Kubernetes Service
+| ส่วน | เทคโนโลยี |
+|---|---|
+| Backend | Spring Boot 4, Java 17 |
+| Container | Docker (multi-stage build) |
+| Registry | Azure Container Registry (ACR) |
+| Orchestration | Azure Kubernetes Service (AKS) |
+| CI/CD | Jenkins |
+| Infrastructure | Azure |
 
-ค่าหลักของระบบนี้คือ:
+**API Endpoints:**
 
-- Resource Group: `rg-users-api`
-- ACR: `usersapiacr`
-- ACR Login Server: `usersapiacr.azurecr.io`
-- AKS: `aks-users-api`
-- Namespace: `users-api`
-- Image Repo: `users-api`
-- Jenkins agent VM: `jenkins-linux-agent`
+```
+GET  /api/v1/users        ดูรายชื่อ users ทั้งหมด
+GET  /api/v1/users/{id}   ดู user ตาม ID
+GET  /actuator/health/readiness
+GET  /actuator/health/liveness
+```
 
-หมายเหตุสำคัญ:
+**สิ่งที่ pipeline ทำทุกครั้งที่รัน:**
 
-- pipeline ปัจจุบัน build image เป็น `linux/amd64`
-- เพราะฉะนั้น AKS node และ Jenkins agent VM ควรใช้สถาปัตยกรรม `x64`
+```
+1. checkout source code จาก Git
+2. รัน unit tests ด้วย Maven
+3. package เป็น JAR
+4. login Azure ด้วย Service Principal
+5. build Docker image (linux/amd64)
+6. push image ขึ้น Azure Container Registry
+7. ดึง AKS credentials
+8. apply Kubernetes manifests (namespace, deployment, service)
+9. รอจน pods พร้อม
+```
+
+---
 
 ## 2. ภาพรวมสถาปัตยกรรม
 
-```text
+```
 Developer
-   |
-   v
-Git Repo
-   |
-   v
-Jenkins Controller
-   |
-   v
-Jenkins Agent VM on Azure
-   |-- mvn test/package
-   |-- docker buildx build
-   |-- az login
-   |-- kubectl apply
-   |
-   +------------------> Azure Container Registry (usersapiacr)
-   |
-   +------------------> Azure Kubernetes Service (aks-users-api)
-                                |
-                                v
-                           Namespace users-api
-                                |
-                                v
-                           Deployment users-api
-                                |
-                                v
-                                Pods
-                                |
-                                v
-                           Service users-api
-                                |
-                                v
-                             Public IP
+    |
+    | git push
+    v
+Git Repository (GitHub)
+    |
+    | webhook / manual trigger
+    v
+Jenkins Controller  <-------- ngrok tunnel (ถ้า local) หรือ public IP
+    |
+    | dispatch job
+    v
+Jenkins Agent VM (Azure Ubuntu)
+    |
+    |-- ./mvnw test / package
+    |-- az login (service principal)
+    |-- az acr login
+    |-- docker buildx build --platform linux/amd64 --push
+    |-- az aks get-credentials
+    |-- kubectl apply
+    |
+    +-------------------> Azure Container Registry
+    |                      usersapiacr.azurecr.io/users-api:<BUILD_NUMBER>
+    |
+    +-------------------> Azure Kubernetes Service
+                           aks-users-api
+                               |
+                           Namespace: users-api
+                               |
+                           Deployment: users-api (2 replicas)
+                               |
+                           Service: users-api (LoadBalancer)
+                               |
+                           Public IP --> อินเทอร์เน็ต
 ```
 
-## 3. สิ่งที่ต้องมีใน Azure
+---
 
-สำหรับ flow นี้ ต้องมี resource อย่างน้อย:
+## 3. ค่าหลักของระบบ
 
-1. `Resource Group`
-2. `Azure Container Registry`
-3. `Azure Kubernetes Service`
-4. `Ubuntu VM` สำหรับเป็น Jenkins agent
-5. `App Registration / Service Principal`
+ค่าเหล่านี้ใช้อ้างอิงตลอด guide นี้:
 
-ถ้าจะเปิด HTTPS ผ่าน Ingress ภายหลัง ค่อยเพิ่ม:
+| ชื่อ | ค่า |
+|---|---|
+| Resource Group | `rg-users-api` |
+| Region | `southeastasia` |
+| ACR Name | `usersapiacr` |
+| ACR Login Server | `usersapiacr.azurecr.io` |
+| AKS Cluster | `aks-users-api` |
+| K8s Namespace | `users-api` |
+| Image Repo | `users-api` |
+| Jenkins Agent VM | `jenkins-linux-agent` |
+| Service Principal | `jenkins-users-api-sp` |
+| Jenkins Agent Node | `linux-docker-agent` |
+| Jenkins Agent Labels | `linux docker` |
 
-- ingress-nginx
-- cert-manager
-- DNS record
+---
 
-## 4. ลำดับการสร้างที่แนะนำ
+## 4. สิ่งที่ต้องเตรียมก่อน
 
-ให้สร้างตามลำดับนี้:
+**บนเครื่องที่จะใช้งาน:**
 
-1. สร้าง Resource Group
-2. สร้าง ACR
-3. สร้าง AKS และผูกกับ ACR
-4. สร้าง Jenkins agent VM
-5. สร้าง App Registration + Client Secret
-6. Add role ให้ service principal
-7. ติดตั้ง Java, Docker, Azure CLI, kubectl บน Jenkins agent VM
-8. ผูก VM เข้า Jenkins เป็น agent
-9. ใส่ Jenkins credentials
-10. รัน pipeline deploy
+- [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) ติดตั้งแล้ว
+- Azure Account ที่มี Subscription และ permission สร้าง resource ได้
+- Git
+- Java 17+ (ถ้าต้องการรัน local)
 
-## 5. สร้าง Resource Group
+**ตรวจสอบ Azure CLI:**
 
-ตัวอย่าง:
+```bash
+az --version
+az login
+az account show
+```
+
+**ถ้ามี Subscription หลายอัน เลือกอันที่ต้องการ:**
+
+```bash
+az account list -o table
+az account set --subscription "<subscription-id>"
+```
+
+---
+
+## 5. ขั้นตอนที่ 1 — สร้าง Azure Resource Group
+
+Resource Group คือกล่องที่เก็บ resource ทั้งหมดของโปรเจกต์นี้ไว้ด้วยกัน
 
 ```bash
 az group create \
@@ -109,14 +167,17 @@ az group create \
   --location southeastasia
 ```
 
-## 6. สร้าง Azure Container Registry
+ตรวจสอบ:
 
-ใช้ชื่อ:
+```bash
+az group show --name rg-users-api -o table
+```
 
-- Registry name: `usersapiacr`
-- Login server: `usersapiacr.azurecr.io`
+---
 
-ตัวอย่าง:
+## 6. ขั้นตอนที่ 2 — สร้าง Azure Container Registry
+
+ACR ใช้เก็บ Docker image ที่ Jenkins build แล้ว push ขึ้นไป AKS จะ pull image จากที่นี่
 
 ```bash
 az acr create \
@@ -126,27 +187,26 @@ az acr create \
   --admin-enabled false
 ```
 
-สิ่งที่ควรรู้:
+ตรวจสอบ:
 
-- ACR ใช้เก็บ image ที่ Jenkins push ขึ้นไป
-- AKS จะ pull image จากที่นี่
-- pipeline ใช้ค่า default นี้ใน [Jenkinsfile](/D:/workspaceboss/test_agent/test_agent/Jenkinsfile#L10)
+```bash
+az acr show --name usersapiacr --query loginServer -o tsv
+# ควรได้: usersapiacr.azurecr.io
+```
 
-## 7. สร้าง Azure Kubernetes Service
+**สิ่งที่ควรรู้:**
 
-ใช้ค่าแนะนำ:
+- ชื่อ ACR ต้องเป็น lowercase ตัวเลขและตัวอักษรเท่านั้น ห้ามมีขีด
+- `--sku Standard` เพียงพอสำหรับโปรเจกต์นี้
+- `--admin-enabled false` ดีกว่าเพราะเราใช้ Service Principal แทน
 
-- Cluster name: `aks-users-api`
-- Resource Group: `rg-users-api`
-- Region: `Southeast Asia`
-- Architecture: `x64`
-- Node size: รุ่น x86 ที่ quota ผ่าน เช่น `Standard_D2s_v4`
-- Node count: `1`
-- Autoscaling: ปิดไว้ก่อน
-- Authentication: `Local accounts with Kubernetes RBAC`
-- Container registry: เลือก `usersapiacr`
+---
 
-ตัวอย่างแนวคิด:
+## 7. ขั้นตอนที่ 3 — สร้าง Azure Kubernetes Service
+
+AKS คือ cluster ที่รัน application จริง
+
+**สร้างผ่าน CLI:**
 
 ```bash
 az aks create \
@@ -155,257 +215,434 @@ az aks create \
   --node-count 1 \
   --node-vm-size Standard_D2s_v4 \
   --attach-acr usersapiacr \
-  --generate-ssh-keys
+  --generate-ssh-keys \
+  --enable-managed-identity
 ```
 
-สิ่งที่ควรรู้:
-
-- ถ้า Azure ขึ้น quota error ให้เปลี่ยน VM size ไปตระกูลที่ subscription ใช้ได้
-- เพราะ pipeline build `amd64` แล้ว ไม่จำเป็นต้องบังคับใช้ ARM node
-- ตอนสร้าง AKS ถ้าเลือก ACR ไว้ในหน้า Integrations จะช่วยให้ AKS pull image จาก ACR ได้ง่ายขึ้น
-
-## 8. สร้าง Jenkins Agent VM
-
-แนวทางที่ใช้ในโปรเจกต์นี้คือ:
-
-- Jenkins controller รันอยู่ที่อื่น
-- Azure VM ตัวนี้รันเป็น Jenkins agent
-
-ค่าแนะนำ:
-
-- VM name: `jenkins-linux-agent`
-- Image: `Ubuntu Server 24.04 LTS`
-- Architecture: `x64`
-- Size: `Standard_D2s_v3`, `Standard_D2s_v4` หรือรุ่นใกล้เคียงที่ quota ผ่าน
-- Authentication: `SSH public key`
-- Public inbound ports: `SSH (22)` เพื่อให้เข้าไปติดตั้งได้
-
-คำเตือน:
-
-- ถ้าเปิด `SSH (22)` จาก internet ทุก IP จะมี warning ใน Portal
-- ใช้งานเริ่มต้นได้ แต่หลังจากสร้างเสร็จควรจำกัด source IP ใน NSG ให้เป็น IP ของผู้ดูแล
-
-## 9. สร้าง App Registration สำหรับ Jenkins
-
-ไปที่:
-
-`Microsoft Entra ID -> App registrations -> New registration`
-
-ใช้ชื่อแนะนำ:
-
-- `jenkins-users-api-sp`
-
-จากนั้น:
-
-1. เปิด App registration ที่สร้าง
-2. จดค่า `Application (client) ID`
-3. จดค่า `Directory (tenant) ID`
-4. ไปที่ `Certificates & secrets`
-5. สร้าง `Client secret`
-6. จดค่า `Client secret value`
-7. ไปที่หน้า Subscription แล้วจด `Subscription ID`
-
-ค่าที่ต้องได้สุดท้ายมี 4 ค่า:
-
-- Client ID
-- Client Secret
-- Tenant ID
-- Subscription ID
-
-## 10. ต้อง add role อะไรบ้าง
-
-ตัวนี้เป็นจุดสำคัญที่สุดหลังสร้าง Azure resource แล้ว
-
-service principal ของ Jenkins ต้องมีสิทธิ์อย่างน้อย:
-
-1. `AcrPush`
-2. `Azure Kubernetes Service Cluster User Role`
-
-### 10.1 `AcrPush`
-
-scope:
-
-- ให้ที่ ACR `usersapiacr`
-
-เหตุผล:
-
-- ใช้สำหรับ `az acr login`
-- ใช้สำหรับ push image เข้า ACR
-
-### 10.2 `Azure Kubernetes Service Cluster User Role`
-
-scope:
-
-- ให้ที่ AKS `aks-users-api`
-
-เหตุผล:
-
-- ใช้สำหรับ `az aks get-credentials`
-- ทำให้ Jenkins ดึง kubeconfig ของ AKS มาใช้ได้
-
-### 10.3 วิธี add role ผ่าน Azure Portal
-
-ทำซ้ำ 2 รอบตาม role ที่ต้องให้:
-
-1. เปิด resource ที่ต้องการ เช่น ACR หรือ AKS
-2. ไปที่ `Access control (IAM)`
-3. กด `Add role assignment`
-4. เลือก role
-5. เลือก assignee เป็น service principal `jenkins-users-api-sp`
-6. กด save
-
-### 10.4 ตัวอย่าง add role ผ่าน Azure CLI
-
-ให้แทนค่าตัวแปรก่อน:
+ตรวจสอบ:
 
 ```bash
-SUBSCRIPTION_ID="<subscription-id>"
+az aks show --resource-group rg-users-api --name aks-users-api --query provisioningState -o tsv
+# ควรได้: Succeeded
+```
+
+**ค่าที่แนะนำถ้าสร้างผ่าน Azure Portal:**
+
+| ฟิลด์ | ค่า |
+|---|---|
+| Cluster name | `aks-users-api` |
+| Region | `Southeast Asia` |
+| Architecture | `x64` |
+| Node size | `Standard_D2s_v4` หรือ x64 ที่ quota ผ่าน |
+| Node count | `1` |
+| Autoscaling | ปิด |
+| Authentication | `Local accounts with Kubernetes RBAC` |
+| Container registry (Integrations tab) | เลือก `usersapiacr` |
+
+**สิ่งสำคัญ:**
+
+- ต้องใช้ node `x64` เพราะ pipeline build image เป็น `linux/amd64`
+- ถ้า Azure ขึ้น quota error ให้ลองเปลี่ยน size เป็น `Standard_B2s` หรือ `Standard_D2as_v5`
+- `--attach-acr` หรือการเลือก ACR ใน Integrations tab จะทำให้ AKS pull image จาก ACR ได้โดยอัตโนมัติ
+
+---
+
+## 8. ขั้นตอนที่ 4 — สร้าง Jenkins Agent VM
+
+VM นี้จะทำหน้าที่เป็น Jenkins Agent ที่รัน pipeline จริง (build, test, push, deploy)
+
+**สร้างผ่าน CLI:**
+
+```bash
+az vm create \
+  --resource-group rg-users-api \
+  --name jenkins-linux-agent \
+  --image Ubuntu2404 \
+  --size Standard_D2s_v4 \
+  --admin-username azureuser \
+  --generate-ssh-keys \
+  --public-ip-sku Standard
+```
+
+**หรือสร้างผ่าน Azure Portal ด้วยค่าเหล่านี้:**
+
+| ฟิลด์ | ค่า |
+|---|---|
+| VM name | `jenkins-linux-agent` |
+| Image | `Ubuntu Server 24.04 LTS` |
+| Architecture | `x64` |
+| Size | `Standard_D2s_v4` หรือ x64 ที่ quota ผ่าน |
+| Authentication | `SSH public key` |
+| Public inbound ports | `SSH (22)` |
+
+ดู Public IP ของ VM:
+
+```bash
+az vm show \
+  --resource-group rg-users-api \
+  --name jenkins-linux-agent \
+  --show-details \
+  --query publicIps -o tsv
+```
+
+**คำเตือน:**
+
+- การเปิด port 22 จากทุก IP จะมี warning ใน Azure Portal
+- หลังใช้งานเสร็จ ควรจำกัด NSG ให้รับแค่ IP ของผู้ดูแล
+
+---
+
+## 9. ขั้นตอนที่ 5 — สร้าง App Registration และ Service Principal
+
+Service Principal คือ "bot account" ที่ Jenkins ใช้ login Azure แทน user จริง
+
+### 9.1 สร้าง App Registration ผ่าน Azure Portal
+
+1. ไปที่ **Microsoft Entra ID** → **App registrations** → **New registration**
+2. ตั้งชื่อ: `jenkins-users-api-sp`
+3. เลือก `Accounts in this organizational directory only`
+4. กด **Register**
+
+### 9.2 จดค่าที่ต้องใช้
+
+จากหน้า App registration ที่เพิ่งสร้าง:
+
+| ค่า | อยู่ที่ไหน |
+|---|---|
+| `Application (client) ID` | หน้า Overview |
+| `Directory (tenant) ID` | หน้า Overview |
+| `Subscription ID` | ไปที่ Subscriptions แล้วดูค่า |
+
+### 9.3 สร้าง Client Secret
+
+1. ไปที่ **Certificates & secrets** → **Client secrets** → **New client secret**
+2. ใส่ Description เช่น `jenkins-secret`
+3. เลือก Expires เช่น `24 months`
+4. กด **Add**
+5. **คัดลอก `Value` ทันที** เพราะจะเห็นได้ครั้งเดียว
+
+### 9.4 สรุปค่าที่ต้องเก็บไว้ (4 ค่า)
+
+```
+Client ID        = xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+Client Secret    = xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Tenant ID        = xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+Subscription ID  = xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+---
+
+## 10. ขั้นตอนที่ 6 — กำหนด Role ให้ Service Principal
+
+Jenkins ต้องมีสิทธิ์ push image ไป ACR และ deploy ไป AKS
+
+### Role ที่ต้องให้
+
+| Role | Scope | เหตุผล |
+|---|---|---|
+| `AcrPush` | ACR `usersapiacr` | push image ขึ้น ACR |
+| `Azure Kubernetes Service Cluster User Role` | AKS `aks-users-api` | ดึง kubeconfig ของ AKS |
+
+### วิธีที่ 1 — ผ่าน Azure Portal (ทำซ้ำ 2 รอบ)
+
+**รอบที่ 1 — ให้สิทธิ์ AcrPush บน ACR:**
+
+1. ไปที่ **Container registries** → `usersapiacr`
+2. เลือก **Access control (IAM)** → **Add role assignment**
+3. Role: `AcrPush`
+4. Members: เลือก `jenkins-users-api-sp`
+5. กด **Review + assign**
+
+**รอบที่ 2 — ให้สิทธิ์ AKS บน AKS:**
+
+1. ไปที่ **Kubernetes services** → `aks-users-api`
+2. เลือก **Access control (IAM)** → **Add role assignment**
+3. Role: `Azure Kubernetes Service Cluster User Role`
+4. Members: เลือก `jenkins-users-api-sp`
+5. กด **Review + assign**
+
+### วิธีที่ 2 — ผ่าน Azure CLI
+
+```bash
+# กำหนดตัวแปร
 SP_APP_ID="<client-id>"
-ACR_ID="$(az acr show -g rg-users-api -n usersapiacr --query id -o tsv)"
-AKS_ID="$(az aks show -g rg-users-api -n aks-users-api --query id -o tsv)"
-```
+ACR_ID=$(az acr show -g rg-users-api -n usersapiacr --query id -o tsv)
+AKS_ID=$(az aks show -g rg-users-api -n aks-users-api --query id -o tsv)
 
-จากนั้นรัน:
-
-```bash
+# ให้สิทธิ์ push image ไป ACR
 az role assignment create \
   --assignee "$SP_APP_ID" \
   --role AcrPush \
   --scope "$ACR_ID"
 
+# ให้สิทธิ์เข้า AKS
 az role assignment create \
   --assignee "$SP_APP_ID" \
   --role "Azure Kubernetes Service Cluster User Role" \
   --scope "$AKS_ID"
 ```
 
-### 10.5 ถ้า Jenkins deploy แล้วยังโดน Forbidden
-
-ส่วนใหญ่จะเป็น 2 กลุ่ม:
-
-1. ยัง add Azure role ไม่ครบ
-2. ดึง kubeconfig ได้ แต่สิทธิ์ใน Kubernetes ยังไม่พอ
-
-แนวทางแก้ที่พบบ่อย:
-
-- เช็กก่อนว่า `az aks get-credentials` ผ่านไหม
-- ถ้า `kubectl apply` ติด `Forbidden` ให้พิจารณาใช้ admin credential ชั่วคราว หรือผูก Kubernetes RBAC เพิ่ม
-
-สำหรับ repo นี้ Jenkinsfile ปัจจุบันใช้:
+ตรวจสอบ:
 
 ```bash
-az aks get-credentials --resource-group ... --name ...
+az role assignment list --assignee "$SP_APP_ID" -o table
 ```
 
-ไม่ได้ใช้ `--admin`
+---
 
-## 11. ติดตั้งเครื่องมือบน Jenkins agent VM
+## 11. ขั้นตอนที่ 7 — ติดตั้ง Jenkins Controller
+
+Jenkins Controller คือ server หลักที่จัดการ pipeline และ UI มีหลายวิธีในการติดตั้ง
+
+### วิธีที่ 1 — รันผ่าน Docker (แนะนำสำหรับ local / dev)
+
+```bash
+docker run -d \
+  --name jenkins \
+  -p 8082:8080 \
+  -p 50000:50000 \
+  -v jenkins_home:/var/jenkins_home \
+  jenkins/jenkins:lts
+```
+
+ดู initial admin password:
+
+```bash
+docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+```
+
+เปิด browser ไปที่ `http://localhost:8082` แล้วทำตามขั้นตอน setup
+
+### วิธีที่ 2 — ติดตั้งบน Ubuntu VM
+
+```bash
+# ติดตั้ง Java ก่อน
+sudo apt-get update
+sudo apt-get install -y openjdk-17-jre-headless
+
+# เพิ่ม Jenkins repo
+sudo wget -O /usr/share/keyrings/jenkins-keyring.asc \
+  https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
+
+echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] \
+  https://pkg.jenkins.io/debian-stable binary/" | \
+  sudo tee /etc/apt/sources.list.d/jenkins.list > /dev/null
+
+sudo apt-get update
+sudo apt-get install -y jenkins
+
+sudo systemctl start jenkins
+sudo systemctl enable jenkins
+
+# ดู initial password
+sudo cat /var/lib/jenkins/secrets/initialAdminPassword
+```
+
+### Jenkins อยู่บน local แต่ Agent อยู่บน Azure VM
+
+ถ้า Jenkins Controller อยู่บนเครื่อง local ที่ไม่มี public IP ต้องใช้ **ngrok** เพื่อ expose ออกอินเทอร์เน็ต
+
+**ติดตั้ง ngrok:**
+
+```bash
+# Windows — ดาวน์โหลดจาก https://ngrok.com/download
+# หรือ
+choco install ngrok
+```
+
+**ตั้งค่า authtoken (ทำครั้งเดียว):**
+
+```bash
+ngrok config add-authtoken <your-authtoken>
+```
+
+**เปิด tunnel:**
+
+```bash
+ngrok http 8082
+# จะได้ URL เช่น: https://xxxx.ngrok-free.app
+```
+
+**อัปเดต Jenkins URL:**
+
+ไปที่ **Manage Jenkins** → **System** → **Jenkins URL**
+
+เปลี่ยนเป็น ngrok URL เช่น `https://xxxx.ngrok-free.app` แล้ว Save
+
+> **หมายเหตุ:** Free plan ของ ngrok URL จะเปลี่ยนทุกครั้งที่ restart ต้องอัปเดต Jenkins URL ใหม่ทุกครั้ง
+
+---
+
+## 12. ขั้นตอนที่ 8 — ติดตั้งเครื่องมือบน Jenkins Agent VM
 
 SSH เข้า VM ก่อน:
 
 ```bash
-ssh -i <path-to-private-key> azureuser@<PUBLIC_IP>
+ssh -i <path-to-private-key> azureuser@<PUBLIC_IP_OF_VM>
 ```
 
-ลำดับที่แนะนำ:
-
-1. ลง package พื้นฐานและ Java
-2. ลง Docker และ buildx
-3. logout แล้ว SSH เข้าใหม่ 1 รอบ
-4. เช็กว่า `docker` ใช้ได้โดยไม่ต้องมี `sudo`
-5. ลง Azure CLI
-6. ลง kubectl
-
-### 11.1 update package และติดตั้งพื้นฐาน
+### 12.1 อัปเดต package และติดตั้งพื้นฐาน + Java
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl gnupg lsb-release git unzip apt-transport-https software-properties-common openjdk-17-jre-headless
+sudo apt-get update && sudo apt-get upgrade -y
+sudo apt-get install -y \
+  ca-certificates curl gnupg lsb-release git \
+  unzip apt-transport-https software-properties-common \
+  openjdk-17-jre-headless
+
+# ตรวจสอบ
 java -version
 ```
 
-### 11.2 ติดตั้ง Docker Engine + Buildx
+### 12.2 ติดตั้ง Docker Engine + Buildx Plugin
 
 ```bash
+# เพิ่ม Docker GPG key
 sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+  sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 sudo chmod a+r /etc/apt/keyrings/docker.gpg
 
+# เพิ่ม Docker repo
 echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-  $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable" | \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+  https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
   sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
+# ติดตั้ง Docker
 sudo apt-get update
 sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
+
+# เพิ่ม user เข้ากลุ่ม docker (ไม่ต้อง sudo ตอนรัน docker)
 sudo usermod -aG docker azureuser
 ```
 
-ออกจาก SSH แล้วเข้าใหม่ 1 รอบ เพื่อให้ group `docker` มีผล
+**ออกจาก SSH แล้วเข้าใหม่ 1 รอบ** เพื่อให้ group มีผล:
 
-จากนั้นเช็ก:
+```bash
+exit
+ssh -i <path-to-private-key> azureuser@<PUBLIC_IP_OF_VM>
+```
+
+ตรวจสอบ:
 
 ```bash
 docker version
 docker buildx version
+docker run --rm hello-world
 ```
 
-### 11.3 ติดตั้ง Azure CLI
+### 12.3 ติดตั้ง Azure CLI
 
 ```bash
 curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+# ตรวจสอบ
 az version
 ```
 
-### 11.4 ติดตั้ง kubectl
+### 12.4 ติดตั้ง kubectl
 
 ```bash
+# เพิ่ม Kubernetes GPG key
 sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.34/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.34/deb/Release.key | \
+  sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 sudo chmod a+r /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.34/deb/ /' | \
+# เพิ่ม Kubernetes repo
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] \
+  https://pkgs.k8s.io/core:/stable:/v1.34/deb/ /' | \
   sudo tee /etc/apt/sources.list.d/kubernetes.list
 
+# ติดตั้ง
 sudo apt-get update
 sudo apt-get install -y kubectl
+
+# ตรวจสอบ
 kubectl version --client
 ```
 
-### 11.5 เช็ก Java
+### 12.5 สรุปตรวจสอบทุก tool
 
 ```bash
 java -version
+docker version
+docker buildx version
+az version
+kubectl version --client
 ```
 
-## 12. ผูก VM เข้า Jenkins เป็น agent
+ทุกอันต้องตอบกลับเวอร์ชันได้ ไม่มี error
 
-บน Jenkins controller:
+---
 
-1. ไปที่ `Manage Jenkins`
-2. ไปที่ `Nodes`
-3. สร้าง node ใหม่ เช่น `linux-docker-agent`
-4. ใส่ labels ให้ตรงกับ pipeline เช่น `linux docker`
-5. เลือก launch method เป็น `Launch agent by connecting it to the controller`
-6. copy command ที่ Jenkins สร้างให้
+## 13. ขั้นตอนที่ 9 — ผูก Agent VM เข้า Jenkins
 
-ตัวอย่าง command:
+### 13.1 สร้าง Node ใน Jenkins
+
+1. ไปที่ **Manage Jenkins** → **Nodes** → **New Node**
+2. Node name: `linux-docker-agent`
+3. เลือก `Permanent Agent`
+4. กด **Create**
+
+**ตั้งค่า Node:**
+
+| ฟิลด์ | ค่า |
+|---|---|
+| Number of executors | `1` |
+| Remote root directory | `/home/azureuser/jenkins-agent` |
+| Labels | `linux docker` |
+| Usage | `Use this node as much as possible` |
+| Launch method | `Launch agent by connecting it to the controller` |
+
+กด **Save**
+
+### 13.2 Copy คำสั่ง Connect จาก Jenkins
+
+เปิด Node ที่เพิ่งสร้าง จะเห็นคำสั่งแบบนี้:
 
 ```bash
-mkdir -p /home/azureuser/jenkins-agent
-cd /home/azureuser/jenkins-agent
-curl -O https://<JENKINS_URL>/jnlpJars/agent.jar
+curl -sO http://<JENKINS_URL>/jnlpJars/agent.jar
 java -jar agent.jar \
-  -url <JENKINS_URL> \
-  -secret <SECRET> \
+  -url http://<JENKINS_URL>/ \
+  -secret <SECRET_FROM_JENKINS> \
   -name "linux-docker-agent" \
   -webSocket \
   -workDir "/home/azureuser/jenkins-agent"
 ```
 
-ถ้าต้องการให้รันถาวร แนะนำทำเป็น systemd service
+### 13.3 รันคำสั่งบน Agent VM
 
-ตัวอย่าง:
+SSH เข้า VM แล้วรัน:
+
+```bash
+mkdir -p /home/azureuser/jenkins-agent
+cd /home/azureuser/jenkins-agent
+
+# ใช้ URL จริงจาก Jenkins (ngrok URL หรือ public IP)
+curl -sO https://<JENKINS_URL>/jnlpJars/agent.jar
+
+java -jar agent.jar \
+  -url https://<JENKINS_URL>/ \
+  -secret <SECRET_FROM_JENKINS> \
+  -name "linux-docker-agent" \
+  -webSocket \
+  -workDir "/home/azureuser/jenkins-agent"
+```
+
+เมื่อ connect สำเร็จ Jenkins จะแสดง **Agent is connected.**
+
+### 13.4 ทำให้ Agent รันตลอดเวลา (systemd service)
+
+สร้าง service file:
+
+```bash
+sudo nano /etc/systemd/system/jenkins-agent.service
+```
+
+ใส่ content:
 
 ```ini
 [Unit]
@@ -415,250 +652,466 @@ After=network.target
 [Service]
 User=azureuser
 WorkingDirectory=/home/azureuser/jenkins-agent
-ExecStart=/usr/bin/java -jar /home/azureuser/jenkins-agent/agent.jar -url <JENKINS_URL> -secret <SECRET> -name "linux-docker-agent" -webSocket -workDir "/home/azureuser/jenkins-agent"
+ExecStart=/usr/bin/java -jar /home/azureuser/jenkins-agent/agent.jar \
+  -url https://<JENKINS_URL>/ \
+  -secret <SECRET_FROM_JENKINS> \
+  -name "linux-docker-agent" \
+  -webSocket \
+  -workDir /home/azureuser/jenkins-agent
 Restart=always
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-## 13. สร้าง Jenkins Credentials
-
-บน Jenkins สร้าง credentials ตามนี้:
-
-### 13.1 `azure-sp`
-
-ชนิด:
-
-- `Username with password`
-
-mapping:
-
-- Username = `Application (client) ID`
-- Password = `Client secret value`
-
-### 13.2 `azure-tenant-id`
-
-ชนิด:
-
-- `Secret text`
-
-ค่า:
-
-- `Directory (tenant) ID`
-
-### 13.3 `azure-subscription-id`
-
-ชนิด:
-
-- `Secret text`
-
-ค่า:
-
-- `Subscription ID`
-
-## 14. ค่าที่ Jenkins pipeline ใช้
-
-ค่า default ปัจจุบันใน [Jenkinsfile](/D:/workspaceboss/test_agent/test_agent/Jenkinsfile#L9):
-
-- `ACR_NAME = usersapiacr`
-- `ACR_LOGIN_SERVER = usersapiacr.azurecr.io`
-- `IMAGE_REPO = users-api`
-- `AKS_RESOURCE_GROUP = rg-users-api`
-- `AKS_CLUSTER_NAME = aks-users-api`
-- `K8S_NAMESPACE = users-api`
-- `ENABLE_INGRESS_TLS = false`
-- `INSTALL_INGRESS_STACK = false`
-
-จุดสำคัญ:
-
-- pipeline ใช้ `linux && docker` เป็น agent label
-- node ใน Jenkins จึงควรมี labels อย่างน้อย `linux docker`
-
-## 15. Deploy ครั้งแรก
-
-เมื่อทุกอย่างพร้อมแล้ว ให้รัน Jenkins pipeline
-
-ลำดับที่ pipeline ทำ:
-
-1. `./mvnw -B clean test`
-2. `./mvnw -B package -DskipTests`
-3. `az login --service-principal`
-4. `az account set --subscription`
-5. `az acr login`
-6. `docker buildx build --platform linux/amd64 --push`
-7. `az aks get-credentials`
-8. `kubectl apply` namespace, deployment, service
-9. `kubectl rollout status`
-
-## 16. เช็กหลัง deploy
-
-รันบน Jenkins agent VM หรือเครื่องที่มีสิทธิ์เข้า AKS:
+เปิดใช้งาน:
 
 ```bash
-az aks get-credentials -g rg-users-api -n aks-users-api --overwrite-existing
+sudo systemctl daemon-reload
+sudo systemctl enable jenkins-agent
+sudo systemctl start jenkins-agent
+
+# เช็กสถานะ
+sudo systemctl status jenkins-agent
+```
+
+---
+
+## 14. ขั้นตอนที่ 10 — สร้าง Jenkins Credentials
+
+ไปที่ **Manage Jenkins** → **Credentials** → **System** → **Global credentials** → **Add Credentials**
+
+ต้องสร้างครบ 3 อัน:
+
+### 14.1 `azure-sp` — Service Principal
+
+| ฟิลด์ | ค่า |
+|---|---|
+| Kind | `Username with password` |
+| Username | `Application (client) ID` |
+| Password | `Client secret value` |
+| ID | `azure-sp` |
+| Description | `Azure Service Principal for Jenkins` |
+
+### 14.2 `azure-tenant-id` — Tenant ID
+
+| ฟิลด์ | ค่า |
+|---|---|
+| Kind | `Secret text` |
+| Secret | `Directory (tenant) ID` |
+| ID | `azure-tenant-id` |
+| Description | `Azure Tenant ID` |
+
+### 14.3 `azure-subscription-id` — Subscription ID
+
+| ฟิลด์ | ค่า |
+|---|---|
+| Kind | `Secret text` |
+| Secret | `Subscription ID` |
+| ID | `azure-subscription-id` |
+| Description | `Azure Subscription ID` |
+
+ตรวจสอบว่ามีครบ 3 รายการใน Credentials list
+
+---
+
+## 15. ขั้นตอนที่ 11 — สร้าง Jenkins Pipeline Job
+
+### 15.1 สร้าง Pipeline Job
+
+1. Jenkins หน้าแรก → **New Item**
+2. ชื่อ: `users-api-pipeline`
+3. เลือก `Pipeline`
+4. กด **OK**
+
+### 15.2 ตั้งค่า Pipeline
+
+ใน Configuration:
+
+**General:**
+- เปิด `This project is parameterized` — ไม่ต้องทำเพราะ Jenkinsfile จัดการให้แล้ว
+
+**Pipeline:**
+- Definition: `Pipeline script from SCM`
+- SCM: `Git`
+- Repository URL: URL ของ Git repo นี้
+- Branch: `*/main`
+- Script Path: `Jenkinsfile`
+
+กด **Save**
+
+---
+
+## 16. ขั้นตอนที่ 12 — Deploy ครั้งแรก
+
+### 16.1 ตรวจสอบ Checklist ก่อน Build
+
+- [ ] Jenkins Agent Node แสดงสถานะ **online** (สีเขียว)
+- [ ] Credentials ครบ 3 อัน (`azure-sp`, `azure-tenant-id`, `azure-subscription-id`)
+- [ ] Service Principal มี role ครบ (`AcrPush` + `Azure Kubernetes Service Cluster User Role`)
+- [ ] AKS cluster สถานะ `Succeeded`
+- [ ] ACR สร้างเสร็จแล้ว
+
+### 16.2 กด Build
+
+1. เปิด Job `users-api-pipeline`
+2. กด **Build with Parameters**
+3. ตรวจสอบค่า default (ใช้ได้เลย):
+
+```
+ACR_NAME             = usersapiacr
+ACR_LOGIN_SERVER     = usersapiacr.azurecr.io
+IMAGE_REPO           = users-api
+AKS_RESOURCE_GROUP   = rg-users-api
+AKS_CLUSTER_NAME     = aks-users-api
+K8S_NAMESPACE        = users-api
+ENABLE_INGRESS_TLS   = false
+INSTALL_INGRESS_STACK= false
+```
+
+4. กด **Build**
+
+### 16.3 Pipeline Stages ที่จะเห็น
+
+```
+✅ Checkout           — clone source code
+✅ Test               — ./mvnw -B clean test
+✅ Package            — ./mvnw -B package -DskipTests
+✅ Azure Login        — az login --service-principal
+✅ Build and Push     — docker buildx build + push to ACR
+✅ Deploy to AKS      — kubectl apply + rollout status
+```
+
+ถ้าทุก stage เป็นสีเขียว แสดงว่า deploy สำเร็จ
+
+---
+
+## 17. เช็กหลัง Deploy
+
+รันคำสั่งเหล่านี้บน Jenkins Agent VM หรือเครื่องที่มี kubectl ที่ผูกกับ AKS แล้ว:
+
+```bash
+# ดึง kubeconfig ก่อน (ถ้ายังไม่ได้ดึง)
+az aks get-credentials \
+  --resource-group rg-users-api \
+  --name aks-users-api \
+  --overwrite-existing
+
+# เช็ก deployment
 kubectl -n users-api get deploy
+
+# เช็ก pods
 kubectl -n users-api get pods -o wide
+
+# เช็ก service และ Public IP
 kubectl -n users-api get svc users-api -o wide
+
+# เช็ก image ที่ใช้อยู่
+kubectl -n users-api get deploy users-api \
+  -o jsonpath="{.spec.template.spec.containers[0].image}"
+
+# รอ pods พร้อม
 kubectl -n users-api rollout status deployment/users-api --timeout=180s
 ```
 
-เช็ก image ที่ deployment ใช้อยู่:
+**ผลลัพธ์ที่ควรเห็น:**
 
-```bash
-kubectl -n users-api get deploy users-api -o jsonpath="{.spec.template.spec.containers[0].image}"
+```
+NAME        READY   UP-TO-DATE   AVAILABLE
+users-api   2/2     2            2
+
+NAME             EXTERNAL-IP      PORT(S)        AGE
+users-api        20.x.x.x         80:xxxxx/TCP   2m
 ```
 
-## 17. ทดสอบ API
+เมื่อ `EXTERNAL-IP` ปรากฏ แปลว่า app พร้อมใช้งานแล้ว
 
-ถ้า service เป็น `LoadBalancer`:
+---
+
+## 18. ทดสอบ API
+
+ดู Public IP:
 
 ```bash
-kubectl -n users-api get svc users-api -o wide
+kubectl -n users-api get svc users-api -o jsonpath="{.status.loadBalancer.ingress[0].ip}"
 ```
 
-จากนั้นเรียก:
+เรียก API:
 
 ```bash
+# ดู users ทั้งหมด
 curl http://<EXTERNAL-IP>/api/v1/users
+
+# ดู user ตาม ID
+curl http://<EXTERNAL-IP>/api/v1/users/1
+
+# Health check
 curl http://<EXTERNAL-IP>/actuator/health/readiness
 curl http://<EXTERNAL-IP>/actuator/health/liveness
 ```
 
-## 18. ถ้าอยากเปิด HTTPS ภายหลัง
+**ผลลัพธ์ที่ควรได้:**
 
-pipeline รองรับไว้แล้วผ่าน parameter:
+```json
+[
+  {"id": 1, "name": "Alice"},
+  {"id": 2, "name": "Bob"}
+]
+```
 
-- `INSTALL_INGRESS_STACK`
-- `ENABLE_INGRESS_TLS`
-- `INGRESS_HOST`
-- `TLS_SECRET_NAME`
-- `CLUSTER_ISSUER_NAME`
-- `LETSENCRYPT_EMAIL`
+```json
+{"status": "UP"}
+```
 
-ต้องมีเพิ่ม:
+---
 
-- DNS host จริง
-- ingress-nginx
-- cert-manager
+## 19. เปิด HTTPS (ตัวเลือกเสริม)
 
-## 19. ปัญหาที่เจอบ่อย
+pipeline รองรับ HTTPS ผ่าน ingress-nginx + cert-manager อยู่แล้ว ต้องมีเพิ่ม:
 
-### 19.1 `ImagePullBackOff`
+- Domain name จริงที่ DNS ชี้มาที่ Public IP ของ LoadBalancer
+- Email สำหรับ Let's Encrypt
 
-เช็ก:
+**Build with Parameters แล้วตั้งค่าเพิ่ม:**
+
+```
+INSTALL_INGRESS_STACK = true      (ครั้งแรกเท่านั้น)
+ENABLE_INGRESS_TLS    = true
+INGRESS_HOST          = api.yourdomain.com
+LETSENCRYPT_EMAIL     = your@email.com
+TLS_SECRET_NAME       = users-api-tls
+CLUSTER_ISSUER_NAME   = letsencrypt-prod
+```
+
+หลัง deploy:
+
+```bash
+# เช็ก ingress
+kubectl -n users-api get ingress -o wide
+
+# เช็ก certificate (รอสักครู่)
+kubectl -n users-api get certificate
+
+# เช็ก Public IP ของ ingress controller
+kubectl -n ingress-nginx get svc ingress-nginx-controller -o wide
+```
+
+---
+
+## 20. ปัญหาที่เจอบ่อยและวิธีแก้
+
+### 20.1 `ImagePullBackOff`
 
 ```bash
 kubectl -n users-api describe pod -l app=users-api
+# ดู Events ด้านล่าง
 ```
 
-สาเหตุที่เจอบ่อย:
+| สาเหตุ | วิธีแก้ |
+|---|---|
+| AKS ไม่มีสิทธิ์ pull จาก ACR | ตรวจสอบว่าผูก ACR กับ AKS แล้ว (`az aks check-acr`) |
+| image tag ไม่มีใน ACR | ดู tags ด้วย `az acr repository show-tags -n usersapiacr --repository users-api` |
+| ชื่อ image ผิด | เช็ก `FULL_IMAGE` ใน Jenkins build log |
 
-- AKS pull image จาก ACR ไม่ได้
-- service principal ไม่มีสิทธิ์ push image
-- AKS ยังไม่ได้ผูกกับ ACR
-- image tag ไม่ถูก
+```bash
+# เช็กว่า AKS pull ACR ได้
+az aks check-acr \
+  --resource-group rg-users-api \
+  --name aks-users-api \
+  --acr usersapiacr.azurecr.io
+```
 
-### 19.2 `CrashLoopBackOff`
-
-เช็ก:
+### 20.2 `CrashLoopBackOff`
 
 ```bash
 kubectl -n users-api logs deployment/users-api --all-containers=true --tail=200
 ```
 
-สาเหตุที่เจอบ่อย:
+| สาเหตุ | วิธีแก้ |
+|---|---|
+| App start ไม่ขึ้น | ดู logs หา exception |
+| Image architecture ไม่ตรง node | ตรวจสอบว่า pipeline build `linux/amd64` และ AKS node เป็น x64 |
+| Health probe ไม่ผ่าน | เช็ก `/actuator/health/readiness` ตอบกลับได้ไหม |
 
-- app start ไม่ขึ้น
-- health probe ไม่ผ่าน
-- image architecture ไม่ตรง node
-
-### 19.3 `rollout status` timeout
-
-เช็ก:
+### 20.3 `rollout status` timeout
 
 ```bash
-kubectl -n users-api rollout status deployment/users-api --timeout=180s
 kubectl -n users-api get pods -o wide
 kubectl -n users-api describe pod -l app=users-api
+kubectl -n users-api get events --sort-by='.lastTimestamp'
 ```
 
-### 19.4 `az aks get-credentials` ไม่ผ่าน
-
-สาเหตุที่เจอบ่อย:
-
-- service principal ไม่มี role `Azure Kubernetes Service Cluster User Role`
-- subscription ใน Jenkins ไม่ถูก
-- ชื่อ resource group หรือ cluster ผิด
-
-### 19.5 `az acr login` หรือ push image ไม่ผ่าน
-
-สาเหตุที่เจอบ่อย:
-
-- service principal ไม่มี role `AcrPush`
-- ใช้ ACR name หรือ login server ผิด
-
-## 20. คำสั่งที่ใช้บ่อย
-
-ดู ACR repositories:
+### 20.4 `az aks get-credentials` ไม่ผ่าน
 
 ```bash
+# ทดสอบ login ด้วย service principal
+az login \
+  --service-principal \
+  --username "<client-id>" \
+  --password "<client-secret>" \
+  --tenant "<tenant-id>"
+
+az account set --subscription "<subscription-id>"
+
+az aks get-credentials \
+  --resource-group rg-users-api \
+  --name aks-users-api \
+  --overwrite-existing
+```
+
+| สาเหตุ | วิธีแก้ |
+|---|---|
+| ไม่มี role `Azure Kubernetes Service Cluster User Role` | เพิ่ม role ตาม section 10 |
+| Subscription ID ผิด | เช็ก `azure-subscription-id` credential |
+| ชื่อ resource group หรือ cluster ผิด | เช็ก parameter ใน Jenkins |
+
+### 20.5 `az acr login` ไม่ผ่าน หรือ push ไม่ได้
+
+```bash
+# ทดสอบ
+az acr login --name usersapiacr
+```
+
+| สาเหตุ | วิธีแก้ |
+|---|---|
+| ไม่มี role `AcrPush` | เพิ่ม role ตาม section 10 |
+| ชื่อ ACR ผิด | ต้องเป็น lowercase ไม่มีขีด |
+| Admin disabled และไม่มี SP | ใช้ service principal แทน |
+
+### 20.6 Jenkins Agent ไม่ online
+
+```bash
+# เช็กสถานะ service บน VM
+sudo systemctl status jenkins-agent
+
+# ดู log
+sudo journalctl -u jenkins-agent -n 50
+```
+
+| สาเหตุ | วิธีแก้ |
+|---|---|
+| Jenkins URL ผิด | อัปเดต URL ใน systemd service ให้ตรงกับ ngrok URL ปัจจุบัน |
+| Secret ผิด | copy secret ใหม่จากหน้า Node ใน Jenkins |
+| Port ถูก block | เช็ก firewall / NSG ของ VM |
+
+### 20.7 `docker: command not found` บน Agent
+
+```bash
+# เช็ก docker group
+groups azureuser
+
+# ถ้าไม่มี docker ใน group
+sudo usermod -aG docker azureuser
+# แล้ว logout / login ใหม่
+```
+
+---
+
+## 21. คำสั่งที่ใช้บ่อย
+
+### ACR
+
+```bash
+# ดู repositories ทั้งหมด
 az acr repository list -n usersapiacr -o table
-```
 
-ดู image tags:
-
-```bash
+# ดู tags ของ image
 az acr repository show-tags -n usersapiacr --repository users-api -o table
-```
 
-เช็กว่า AKS pull ACR ได้:
+# ลบ image tag เก่า
+az acr repository delete -n usersapiacr --image users-api:<TAG> --yes
 
-```bash
+# เช็กว่า AKS pull ACR ได้
 az aks check-acr -g rg-users-api -n aks-users-api --acr usersapiacr.azurecr.io
 ```
 
-ดู service:
+### Kubernetes
 
 ```bash
-kubectl -n users-api get svc users-api -o wide
-```
+# เช็กทุกอย่างใน namespace
+kubectl -n users-api get all
 
-scale ลงชั่วคราว:
+# ดู pods พร้อม IP
+kubectl -n users-api get pods -o wide
 
-```bash
+# ดู log แบบ follow
+kubectl -n users-api logs deployment/users-api -f
+
+# ดู events ล่าสุด
+kubectl -n users-api get events --sort-by='.lastTimestamp'
+
+# restart pods (rolling restart)
+kubectl -n users-api rollout restart deployment/users-api
+
+# scale ลงชั่วคราว (ประหยัดค่าใช้จ่าย)
 kubectl -n users-api scale deploy users-api --replicas=0
+
+# scale กลับ
+kubectl -n users-api scale deploy users-api --replicas=2
+
+# ดู image ที่ใช้อยู่
+kubectl -n users-api get deploy users-api \
+  -o jsonpath="{.spec.template.spec.containers[0].image}"
 ```
 
-scale กลับ:
+### Jenkins Agent VM
 
 ```bash
-kubectl -n users-api scale deploy users-api --replicas=2
-kubectl -n users-api rollout status deployment/users-api --timeout=180s
+# start/stop VM เพื่อประหยัดค่าใช้จ่าย
+az vm start  -g rg-users-api -n jenkins-linux-agent
+az vm stop   -g rg-users-api -n jenkins-linux-agent --no-wait
+az vm deallocate -g rg-users-api -n jenkins-linux-agent --no-wait
+
+# เช็ก public IP หลัง start
+az vm show -g rg-users-api -n jenkins-linux-agent \
+  --show-details --query publicIps -o tsv
 ```
 
-## 21. สรุปสั้นที่สุด
+### Local Development
 
-สิ่งที่ต้องสร้างมี 5 อย่าง:
+```bash
+# รัน tests
+./mvnw -B clean test
 
-1. `rg-users-api`
-2. `usersapiacr`
-3. `aks-users-api`
-4. `jenkins-linux-agent`
-5. `jenkins-users-api-sp`
+# รัน app local
+./mvnw spring-boot:run
+# เรียกที่ http://localhost:8080/api/v1/users
 
-สิทธิ์ที่ต้อง add ให้ Jenkins service principal:
+# build Docker image local
+docker build -t users-api:local .
+docker run --rm -p 8080:8080 users-api:local
+```
 
-1. `AcrPush` บน ACR
-2. `Azure Kubernetes Service Cluster User Role` บน AKS
+---
 
-เมื่อสร้างครบแล้ว:
+## สรุปทั้งหมดใน 1 หน้า
 
-1. ติดตั้ง Java, Docker, Azure CLI, kubectl บน VM
-2. ผูก VM เข้า Jenkins เป็น agent
-3. ใส่ Jenkins credentials
-4. รัน pipeline
+**Azure resources ที่ต้องสร้าง (5 อย่าง):**
 
-ประโยคเดียวจบ:
+```
+1. Resource Group    rg-users-api
+2. ACR               usersapiacr
+3. AKS               aks-users-api
+4. Ubuntu VM         jenkins-linux-agent   (Jenkins Agent)
+5. App Registration  jenkins-users-api-sp  (Service Principal)
+```
 
-`Jenkins ใช้ service principal login Azure -> build image -> push ไป ACR -> ดึง AKS credentials -> apply Kubernetes manifests -> app รันบน AKS`
+**Roles ที่ต้องให้ Service Principal (2 อย่าง):**
+
+```
+1. AcrPush                                    → scope: ACR usersapiacr
+2. Azure Kubernetes Service Cluster User Role → scope: AKS aks-users-api
+```
+
+**Jenkins Setup (3 อย่าง):**
+
+```
+1. Credentials ครบ 3 อัน (azure-sp, azure-tenant-id, azure-subscription-id)
+2. Node linux-docker-agent ที่มี labels: linux docker
+3. Pipeline job ที่ใช้ Jenkinsfile จาก repo นี้
+```
+
+**Flow ประโยคเดียว:**
+
+> Jenkins login Azure ด้วย Service Principal → build Docker image → push ไป ACR → ดึง AKS kubeconfig → apply Kubernetes manifests → app รันบน AKS พร้อม Public IP
