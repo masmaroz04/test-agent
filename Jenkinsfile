@@ -7,8 +7,8 @@ pipeline {
     }
 
     parameters {
-        string(name: 'ACR_NAME', defaultValue: 'usersapiacr1', description: 'Azure Container Registry name; full login server is also accepted')
-        string(name: 'ACR_LOGIN_SERVER', defaultValue: 'usersapiacr1.azurecr.io', description: 'ACR login server')
+        string(name: 'ACR_NAME', defaultValue: 'usersapiacr', description: 'Azure Container Registry name; full login server is also accepted')
+        string(name: 'ACR_LOGIN_SERVER', defaultValue: 'usersapiacr.azurecr.io', description: 'ACR login server')
         string(name: 'IMAGE_REPO', defaultValue: 'users-api', description: 'Repository name in ACR')
         string(name: 'AKS_RESOURCE_GROUP', defaultValue: 'rg-users-api', description: 'Resource group containing AKS')
         string(name: 'AKS_CLUSTER_NAME', defaultValue: 'aks-users-api', description: 'AKS cluster name')
@@ -78,24 +78,15 @@ pipeline {
         stage('Build and Push Image') {
             steps {
                 script {
-                    def normalizedAcrName = params.ACR_NAME.trim().toLowerCase()
-                    if (normalizedAcrName.endsWith('.azurecr.io')) {
-                        normalizedAcrName = normalizedAcrName.replaceFirst(/\.azurecr\.io$/, '')
-                    }
-                    if (!(normalizedAcrName ==~ /[a-z0-9]{5,50}/)) {
-                        error("ACR_NAME must resolve to 5-50 lowercase alphanumeric characters. Received: '${params.ACR_NAME}'")
-                    }
-
-                    def shortSha = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
-                    env.IMAGE_TAG = "${env.BUILD_NUMBER}-${shortSha}"
-                    env.ACR_NAME_NORMALIZED = normalizedAcrName
+                    env.IMAGE_TAG = "${env.BUILD_NUMBER}"
+                    env.ACR_NAME_NORMALIZED = params.ACR_NAME.trim().toLowerCase()
                     env.FULL_IMAGE = "${params.ACR_LOGIN_SERVER}/${params.IMAGE_REPO}:${env.IMAGE_TAG}"
                 }
                 sh '''
                   az acr login --name "$ACR_NAME_NORMALIZED"
                   docker buildx create --use --name jenkins-builder >/dev/null 2>&1 || docker buildx use jenkins-builder
                   docker buildx inspect --bootstrap
-                  docker buildx build --platform linux/arm64 --provenance=false -t "$FULL_IMAGE" --push .
+                  docker buildx build --platform linux/amd64 --provenance=false -t "$FULL_IMAGE" --push .
                 '''
             }
         }

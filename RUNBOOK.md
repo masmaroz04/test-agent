@@ -5,7 +5,7 @@
 ## 1. ค่าหลักของระบบ
 
 - Resource Group: `rg-users-api`
-- ACR: `usersapiacr1`
+- ACR: `usersapiacr`
 - AKS: `aks-users-api`
 - Namespace: `users-api`
 - Image repo: `users-api`
@@ -15,8 +15,8 @@
 
 ใน Jenkins job `users-api-pipeline` ใช้ค่าหลักนี้:
 
-- `ACR_NAME = usersapiacr1`
-- `ACR_LOGIN_SERVER = usersapiacr1.azurecr.io`
+- `ACR_NAME = usersapiacr`
+- `ACR_LOGIN_SERVER = usersapiacr.azurecr.io`
 - `IMAGE_REPO = users-api`
 - `AKS_RESOURCE_GROUP = rg-users-api`
 - `AKS_CLUSTER_NAME = aks-users-api`
@@ -122,26 +122,26 @@ java -jar agent.jar -url <JENKINS_URL> -secret <SECRET> -name "linux-docker-agen
 ### ดู repositories
 
 ```bash
-az acr repository list -n usersapiacr1 -o table
+az acr repository list -n usersapiacr -o table
 ```
 
 ### ดู tags ของ image
 
 ```bash
-az acr repository show-tags -n usersapiacr1 --repository users-api -o table
+az acr repository show-tags -n usersapiacr --repository users-api -o table
 ```
 
 ### ลบ image tag เก่า
 
 ```bash
-az acr repository delete -n usersapiacr1 --image users-api:<TAG> --yes
+az acr repository delete -n usersapiacr --image users-api:<TAG> --yes
 ```
 
 ตัวอย่าง:
 
 ```bash
-az acr repository delete -n usersapiacr1 --image users-api:11-57ee229 --yes
-az acr repository delete -n usersapiacr1 --image users-api:12-c1c039e --yes
+az acr repository delete -n usersapiacr --image users-api:11-57ee229 --yes
+az acr repository delete -n usersapiacr --image users-api:12-c1c039e --yes
 ```
 
 ## 8. AKS กับ ACR
@@ -155,7 +155,7 @@ az aks get-credentials -g rg-users-api -n aks-users-api --overwrite-existing
 ### เช็กว่า AKS pull ACR ได้
 
 ```bash
-az aks check-acr -g rg-users-api -n aks-users-api --acr usersapiacr1.azurecr.io
+az aks check-acr -g rg-users-api -n aks-users-api --acr usersapiacr.azurecr.io
 ```
 
 ## 9. ปัญหาที่เจอบ่อย
