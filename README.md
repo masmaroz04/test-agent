@@ -298,36 +298,69 @@ Service Principal คือ "bot account" ที่ Jenkins ใช้ login Azur
 
 ### 9.1 สร้าง App Registration ผ่าน Azure Portal
 
-1. ไปที่ **Microsoft Entra ID** → **App registrations** → **New registration**
-2. ตั้งชื่อ: `jenkins-users-api-sp`
-3. เลือก `Accounts in this organizational directory only`
-4. กด **Register**
+1. ไปที่ [portal.azure.com](https://portal.azure.com)
+2. ค้นหา **Microsoft Entra ID** ใน search bar ด้านบน → กด Enter
+3. เมนูซ้าย → **App registrations** → กด **+ New registration**
+4. กรอกข้อมูล:
+   - Name: `jenkins-users-api-sp`
+   - Supported account types: เลือก `Accounts in this organizational directory only`
+   - Redirect URI: ปล่อยว่าง
+5. กด **Register**
 
-### 9.2 จดค่าที่ต้องใช้
+### 9.2 เก็บค่า Client ID และ Tenant ID
 
-จากหน้า App registration ที่เพิ่งสร้าง:
+หลัง Register เสร็จจะเข้าสู่หน้า Overview ของ App registration
 
-| ค่า | อยู่ที่ไหน |
-|---|---|
-| `Application (client) ID` | หน้า Overview |
-| `Directory (tenant) ID` | หน้า Overview |
-| `Subscription ID` | ไปที่ Subscriptions แล้วดูค่า |
+```
+หน้า Overview จะเห็น:
+┌──────────────────────────────────────────────────────────┐
+│ Display name      : jenkins-users-api-sp                 │
+│ Application (client) ID  : xxxxxxxx-xxxx-xxxx-xxxxxxxxx  │  ← คัดลอกไว้ (Client ID)
+│ Directory (tenant) ID    : xxxxxxxx-xxxx-xxxx-xxxxxxxxx  │  ← คัดลอกไว้ (Tenant ID)
+└──────────────────────────────────────────────────────────┘
+```
+
+คัดลอกทั้ง 2 ค่าไปเก็บไว้
 
 ### 9.3 สร้าง Client Secret
 
-1. ไปที่ **Certificates & secrets** → **Client secrets** → **New client secret**
-2. ใส่ Description เช่น `jenkins-secret`
-3. เลือก Expires เช่น `24 months`
+1. เมนูซ้าย → **Certificates & secrets**
+2. Tab **Client secrets** → กด **+ New client secret**
+3. กรอกข้อมูล:
+   - Description: `jenkins-secret`
+   - Expires: `24 months`
 4. กด **Add**
-5. **คัดลอก `Value` ทันที** เพราะจะเห็นได้ครั้งเดียว
-
-### 9.4 สรุปค่าที่ต้องเก็บไว้ (4 ค่า)
+5. จะเห็นตารางใหม่ขึ้นมา:
 
 ```
-Client ID        = xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-Client Secret    = xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-Tenant ID        = xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-Subscription ID  = xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+┌────────────────┬──────────────────────────────────────┬──────────────────┐
+│ Description    │ Value                                │ Secret ID        │
+├────────────────┼──────────────────────────────────────┼──────────────────┤
+│ jenkins-secret │ xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx│ xxxxxxxx-...     │
+└────────────────┴──────────────────────────────────────┴──────────────────┘
+```
+
+> **สำคัญมาก:** คัดลอก **Value** ทันที — หลังปิดหน้านี้จะเห็นแค่ `*****` และต้องสร้างใหม่
+
+### 9.4 เก็บค่า Subscription ID
+
+1. ค้นหา **Subscriptions** ใน search bar ด้านบน → กด Enter
+2. คลิก Subscription ที่ต้องการใช้
+3. หน้า Overview จะเห็น:
+
+```
+┌──────────────────────────────────────────────────┐
+│ Subscription ID : xxxxxxxx-xxxx-xxxx-xxxxxxxxxxxx │  ← คัดลอกไว้
+└──────────────────────────────────────────────────┘
+```
+
+### 9.5 สรุปค่าที่ต้องเก็บไว้ครบ 4 ค่า
+
+```
+Client ID        = xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx   (จาก App registration → Overview)
+Client Secret    = xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (จาก Certificates & secrets → Value)
+Tenant ID        = xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx   (จาก App registration → Overview)
+Subscription ID  = xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx   (จาก Subscriptions)
 ```
 
 ---
@@ -680,39 +713,102 @@ sudo systemctl status jenkins-agent
 
 ## 14. ขั้นตอนที่ 10 — สร้าง Jenkins Credentials
 
-ไปที่ **Manage Jenkins** → **Credentials** → **System** → **Global credentials** → **Add Credentials**
+ค่าทั้งหมดในขั้นตอนนี้ได้มาจาก **ขั้นตอนที่ 5** (App Registration) ที่ทำไปแล้ว
 
-ต้องสร้างครบ 3 อัน:
+### เปิดหน้า Credentials ใน Jenkins
 
-### 14.1 `azure-sp` — Service Principal
+1. Jenkins หน้าแรก → **Manage Jenkins**
+2. เลือก **Credentials**
+3. คลิก **(global)** ใต้ Stores scoped to Jenkins
+4. เมนูซ้าย → **Add Credentials**
+
+ต้องสร้างครบ 3 อัน ทำซ้ำ 3 รอบ:
+
+---
+
+### 14.1 `azure-sp` — เก็บ Client ID และ Client Secret
+
+**ค่าเหล่านี้มาจากไหน:**
+
+```
+Microsoft Entra ID → App registrations → jenkins-users-api-sp
+
+Username = Application (client) ID   (หน้า Overview)
+Password = Client secret Value        (หน้า Certificates & secrets → Value)
+```
+
+**ใส่ใน Jenkins:**
 
 | ฟิลด์ | ค่า |
 |---|---|
 | Kind | `Username with password` |
-| Username | `Application (client) ID` |
-| Password | `Client secret value` |
+| Scope | `Global` |
+| Username | วางค่า `Application (client) ID` |
+| Password | วางค่า `Client secret Value` |
 | ID | `azure-sp` |
-| Description | `Azure Service Principal for Jenkins` |
+| Description | `Azure Service Principal` |
 
-### 14.2 `azure-tenant-id` — Tenant ID
+กด **Create**
+
+---
+
+### 14.2 `azure-tenant-id` — เก็บ Tenant ID
+
+**ค่านี้มาจากไหน:**
+
+```
+Microsoft Entra ID → App registrations → jenkins-users-api-sp
+
+Secret = Directory (tenant) ID   (หน้า Overview)
+```
+
+**ใส่ใน Jenkins:**
 
 | ฟิลด์ | ค่า |
 |---|---|
 | Kind | `Secret text` |
-| Secret | `Directory (tenant) ID` |
+| Scope | `Global` |
+| Secret | วางค่า `Directory (tenant) ID` |
 | ID | `azure-tenant-id` |
 | Description | `Azure Tenant ID` |
 
-### 14.3 `azure-subscription-id` — Subscription ID
+กด **Create**
+
+---
+
+### 14.3 `azure-subscription-id` — เก็บ Subscription ID
+
+**ค่านี้มาจากไหน:**
+
+```
+Subscriptions → เลือก Subscription ที่ใช้
+
+Secret = Subscription ID   (หน้า Overview)
+```
+
+**ใส่ใน Jenkins:**
 
 | ฟิลด์ | ค่า |
 |---|---|
 | Kind | `Secret text` |
-| Secret | `Subscription ID` |
+| Scope | `Global` |
+| Secret | วางค่า `Subscription ID` |
 | ID | `azure-subscription-id` |
 | Description | `Azure Subscription ID` |
 
-ตรวจสอบว่ามีครบ 3 รายการใน Credentials list
+กด **Create**
+
+---
+
+### ตรวจสอบว่าครบ
+
+กลับไปหน้า **Credentials** → **(global)** ควรเห็นครบ 3 รายการ:
+
+```
+azure-sp                  Username with password
+azure-tenant-id           Secret text
+azure-subscription-id     Secret text
+```
 
 ---
 
