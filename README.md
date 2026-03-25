@@ -508,11 +508,16 @@ ngrok http 8082
 
 ## 12. ขั้นตอนที่ 8 — ติดตั้งเครื่องมือบน Jenkins Agent VM
 
-SSH เข้า VM ก่อน:
+SSH เข้า VM ก่อน — ดู Public IP จาก Azure Portal → **Virtual machines** → `jenkins-linux-agent` → **Overview** → **Public IP address**
 
 ```bash
 ssh -i <path-to-private-key> azureuser@<PUBLIC_IP_OF_VM>
 ```
+
+> **Windows — ข้อควรระวัง:**
+> - ถ้าใช้ **PowerShell**: `ssh -i "$env:USERPROFILE\Downloads\jenkins-linux-agent_key.pem" azureuser@<IP>`
+> - ถ้าใช้ **Command Prompt (cmd)**: `ssh -i "C:\Users\<username>\Downloads\jenkins-linux-agent_key.pem" azureuser@<IP>`
+> - `$env:USERPROFILE` ใช้ได้เฉพาะ PowerShell เท่านั้น ใน cmd ต้องใส่ path เต็มๆ
 
 ### 12.1 อัปเดต package และติดตั้งพื้นฐาน + Java
 
@@ -657,15 +662,34 @@ cd /home/azureuser/jenkins-agent
 # ใช้ URL จริงจาก Jenkins (ngrok URL หรือ public IP)
 curl -sO https://<JENKINS_URL>/jnlpJars/agent.jar
 
-java -jar agent.jar \
+nohup java -jar agent.jar \
   -url https://<JENKINS_URL>/ \
   -secret <SECRET_FROM_JENKINS> \
   -name "linux-docker-agent" \
   -webSocket \
-  -workDir "/home/azureuser/jenkins-agent"
+  -workDir "/home/azureuser/jenkins-agent" > agent.log 2>&1 &
 ```
 
 เมื่อ connect สำเร็จ Jenkins จะแสดง **Agent is connected.**
+
+**ทำไมต้องใช้ `nohup ... &`:**
+
+| วิธีรัน | พฤติกรรม |
+|---|---|
+| `java -jar agent.jar ...` (ไม่มี nohup) | ถ้าปิด terminal หรือ SSH หลุด → process ตายทันที agent ออฟไลน์ |
+| `nohup java -jar agent.jar ... &` | process รันต่อแม้ปิด terminal — `nohup` กัน SIGHUP, `&` รัน background |
+
+**ดู log ของ agent:**
+
+```bash
+tail -f ~/jenkins-agent/agent.log
+```
+
+**เช็ก process ว่ารันอยู่:**
+
+```bash
+ps aux | grep agent.jar
+```
 
 ### 13.4 ทำให้ Agent รันตลอดเวลา (systemd service)
 
@@ -1091,16 +1115,42 @@ sudo journalctl -u jenkins-agent -n 50
 | Secret ผิด | copy secret ใหม่จากหน้า Node ใน Jenkins |
 | Port ถูก block | เช็ก firewall / NSG ของ VM |
 
-### 20.7 `docker: command not found` บน Agent
+### 20.7 `permission denied while trying to connect to the Docker daemon`
+
+Error นี้เกิดเมื่อ user `azureuser` ยังไม่ได้อยู่ใน group `docker`
 
 ```bash
-# เช็ก docker group
+# เช็ก docker group ของ user
 groups azureuser
-
-# ถ้าไม่มี docker ใน group
-sudo usermod -aG docker azureuser
-# แล้ว logout / login ใหม่
 ```
+
+**ถ้าไม่มี `docker` ใน output:**
+
+```bash
+# เพิ่ม user เข้า group docker
+sudo usermod -aG docker azureuser
+```
+
+จากนั้น **ต้อง restart agent** เพื่อให้ group ใหม่มีผล (แค่ logout/login ไม่พอถ้า agent รันอยู่แล้ว):
+
+```bash
+# หา PID ของ agent
+ps aux | grep agent.jar
+
+# kill process เก่า
+kill <PID>
+
+# รัน agent ใหม่
+cd ~/jenkins-agent
+nohup java -jar agent.jar \
+  -url https://<JENKINS_URL>/ \
+  -secret <SECRET_FROM_JENKINS> \
+  -name "linux-docker-agent" \
+  -webSocket \
+  -workDir "/home/azureuser/jenkins-agent" > agent.log 2>&1 &
+```
+
+รอ agent reconnect แล้ว Build ใหม่ใน Jenkins
 
 ---
 
