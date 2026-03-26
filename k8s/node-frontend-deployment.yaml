@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: node-frontend
+  namespace: __NAMESPACE__
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: node-frontend
+  template:
+    metadata:
+      labels:
+        app: node-frontend
+    spec:
+      containers:
+        - name: node-frontend
+          image: __FRONTEND_IMAGE__
+          ports:
+            - containerPort: 3000
+          env:
+            - name: PORT
+              value: "3000"
+            - name: BASE_URL
+              value: "__FRONTEND_BASE_URL__"
+            - name: USERS_API_URL
+              value: "http://users-api:8080"
+            - name: AUTH0_ISSUER_BASE_URL
+              value: "__AUTH0_ISSUER_BASE_URL__"
+            - name: AUTH0_AUDIENCE
+              value: "__AUTH0_AUDIENCE__"
+            - name: AUTH0_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: node-frontend-secret
+                  key: AUTH0_CLIENT_ID
+            - name: AUTH0_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: node-frontend-secret
+                  key: AUTH0_CLIENT_SECRET
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: node-frontend-secret
+                  key: SESSION_SECRET
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 30

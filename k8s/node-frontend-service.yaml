@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: node-frontend
+  namespace: __NAMESPACE__
+spec:
+  type: LoadBalancer
+  selector:
+    app: node-frontend
+  ports:
+    - port: 80
+      targetPort: 3000

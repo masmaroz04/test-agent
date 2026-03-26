@@ -27,6 +27,7 @@
 19. [เปิด HTTPS (ตัวเลือกเสริม)](#19-เปิด-https-ตัวเลือกเสริม)
 20. [ปัญหาที่เจอบ่อยและวิธีแก้](#20-ปัญหาที่เจอบ่อยและวิธีแก้)
 21. [คำสั่งที่ใช้บ่อย](#21-คำสั่งที่ใช้บ่อย)
+22. [Auth0 Authentication](#22-auth0-authentication)
 
 ---
 
@@ -1261,3 +1262,123 @@ docker run --rm -p 8080:8080 users-api:local
 **Flow ประโยคเดียว:**
 
 > Jenkins login Azure ด้วย Service Principal → build Docker image → push ไป ACR → ดึง AKS kubeconfig → apply Kubernetes manifests → app รันบน AKS พร้อม Public IP
+
+---
+
+## 22. Auth0 Authentication
+
+ระบบนี้มี Auth0 JWT authentication ครบวงจร ประกอบด้วย 2 ส่วน:
+
+| ส่วน | เทคโนโลยี | หน้าที่ |
+|---|---|---|
+| Spring Boot API | `spring-boot-starter-oauth2-resource-server` | Validate JWT Bearer token |
+| Node.js frontend | Express + `express-openid-connect` | Login/logout ด้วย Auth0 แล้วเรียก API |
+
+### ภาพรวม Flow
+
+```
+Browser → Node.js frontend (login ด้วย Auth0) → ได้ Access Token
+         → เรียก Spring Boot API พร้อม Bearer token
+         → Spring Boot validate token กับ Auth0 JWKS
+         → ถ้าผ่าน → return users data
+```
+
+### Auth0 Objects ที่ต้องมี
+
+ใน Auth0 Dashboard มี 2 object ที่ใช้:
+
+**1. My App (Regular Web Application)**
+- ใน `Applications → Applications → My App → Settings`
+- ให้ค่า `Client ID` และ `Client Secret`
+- ใช้โดย: Node.js frontend (`express-openid-connect`)
+- ต้องตั้งค่า Callback URL และ Logout URL (ดูหัวข้อถัดไป)
+
+**2. Users API (Custom API)**
+- ใน `Applications → APIs → Users API`
+- Identifier: `https://users-api` → ใช้เป็น `audience`
+- ใช้โดย: Spring Boot resource server ตรวจว่า token ออกมาสำหรับ API นี้
+
+### ตั้งค่า My App — Callback และ Logout URLs
+
+ไปที่ `My App → Settings` เลื่อนลงหา **Application URIs**:
+
+```
+Allowed Callback URLs:
+http://<FRONTEND_EXTERNAL_IP>/callback
+
+Allowed Logout URLs:
+http://<FRONTEND_EXTERNAL_IP>
+```
+
+> แทน `<FRONTEND_EXTERNAL_IP>` ด้วย External IP ของ `node-frontend` service หลัง deploy
+> ถ้า deploy ในเครื่องก่อน ใส่ `http://localhost:3000/callback` และ `http://localhost:3000`
+
+### Jenkins Credentials ที่ต้องเพิ่ม
+
+เพิ่ม credential ใหม่ 1 อัน (นอกเหนือจาก azure-sp, azure-tenant-id, azure-subscription-id):
+
+| Credential ID | Kind | ค่า | หาได้จาก |
+|---|---|---|---|
+| `auth0-client-secret` | Secret text | Client Secret ของ My App | Auth0 → Applications → My App → Settings → **Client Secret** (กด icon ตาเพื่อ reveal) |
+
+### Jenkins Parameters ที่ต้องกรอกเพิ่ม
+
+เมื่อ run pipeline ให้กรอก parameters เพิ่มเติม:
+
+| Parameter | ค่า | หมายเหตุ |
+|---|---|---|
+| `FRONTEND_IMAGE_REPO` | `node-frontend` | ชื่อ repo ใน ACR |
+| `FRONTEND_BASE_URL` | `http://<FRONTEND_EXTERNAL_IP>` | ดูจาก `kubectl get svc node-frontend` หลัง deploy ครั้งแรก |
+| `AUTH0_ISSUER_BASE_URL` | `https://dev-s4q7d35k5uyh6r3n.eu.auth0.com` | Auth0 tenant domain |
+| `AUTH0_AUDIENCE` | `https://users-api` | Users API Identifier |
+| `AUTH0_CLIENT_ID` | `VJVLUuEmBQVE7AJmwwm2HkbJkEH0vBmC` | My App Client ID |
+
+> `AUTH0_CLIENT_SECRET` ดึงจาก Jenkins credential `auth0-client-secret` โดยอัตโนมัติ ไม่ต้องกรอกใน parameter
+
+### Deploy ครั้งแรก (2 รอบ)
+
+เนื่องจาก `FRONTEND_BASE_URL` ต้องการ External IP ที่ได้จากการ deploy ก่อน:
+
+**รอบที่ 1** — Deploy ด้วย `FRONTEND_BASE_URL` ว่างไว้ก่อน
+```bash
+# หลัง deploy ดู External IP ของ node-frontend
+kubectl -n users-api get svc node-frontend
+```
+
+**รอบที่ 2** — ใส่ IP ที่ได้ใน `FRONTEND_BASE_URL` แล้ว run pipeline อีกครั้ง
+พร้อมอัปเดต Auth0 Callback URL ด้วย
+
+### ทดสอบ locally
+
+```bash
+cd node-frontend
+npm install
+
+# สร้าง .env
+cat > .env << 'EOF'
+SESSION_SECRET=any-random-string-32-chars-min
+BASE_URL=http://localhost:3000
+AUTH0_CLIENT_ID=VJVLUuEmBQVE7AJmwwm2HkbJkEH0vBmC
+AUTH0_CLIENT_SECRET=<ดูจาก My App → Settings → Client Secret>
+AUTH0_ISSUER_BASE_URL=https://dev-s4q7d35k5uyh6r3n.eu.auth0.com
+AUTH0_AUDIENCE=https://users-api
+USERS_API_URL=http://localhost:8080
+PORT=3000
+EOF
+
+npm start
+# เปิด http://localhost:3000
+```
+
+> ต้องเพิ่ม `http://localhost:3000/callback` ใน Auth0 My App Allowed Callback URLs ก่อน
+
+### ไฟล์ที่เกี่ยวข้อง
+
+```
+src/main/java/.../security/SecurityConfig.java   ← JWT validation config
+src/main/resources/application.yaml             ← Auth0 issuer URI + audience
+node-frontend/server.js                         ← Express + Auth0 login
+node-frontend/Dockerfile                        ← Container image
+k8s/node-frontend-deployment.yaml              ← AKS deployment
+k8s/node-frontend-service.yaml                 ← LoadBalancer service
+```

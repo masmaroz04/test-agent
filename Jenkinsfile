@@ -23,12 +23,19 @@ pipeline {
         string(name: 'ACME_SERVER', defaultValue: 'https://acme-v02.api.letsencrypt.org/directory', description: 'ACME server URL')
         string(name: 'INGRESS_NGINX_MANIFEST_URL', defaultValue: 'https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml', description: 'ingress-nginx install manifest URL')
         string(name: 'CERT_MANAGER_MANIFEST_URL', defaultValue: 'https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml', description: 'cert-manager install manifest URL')
+        // Node.js frontend parameters
+        string(name: 'FRONTEND_IMAGE_REPO', defaultValue: 'node-frontend', description: 'Repository name in ACR for Node.js frontend')
+        string(name: 'FRONTEND_BASE_URL', defaultValue: '', description: 'Public base URL of the frontend, e.g. http://<EXTERNAL-IP>')
+        string(name: 'AUTH0_ISSUER_BASE_URL', defaultValue: 'https://dev-s4q7d35k5uyh6r3n.eu.auth0.com', description: 'Auth0 issuer base URL (no trailing slash)')
+        string(name: 'AUTH0_AUDIENCE', defaultValue: 'https://users-api', description: 'Auth0 API audience identifier')
+        string(name: 'AUTH0_CLIENT_ID', defaultValue: 'VJVLUuEmBQVE7AJmwwm2HkbJkEH0vBmC', description: 'Auth0 Regular Web App Client ID')
     }
 
     environment {
         AZURE_SP = credentials('azure-sp')
         AZURE_TENANT_ID = credentials('azure-tenant-id')
         AZURE_SUBSCRIPTION_ID = credentials('azure-subscription-id')
+        AUTH0_CLIENT_SECRET = credentials('auth0-client-secret')
     }
 
     stages {
@@ -81,12 +88,14 @@ pipeline {
                     env.IMAGE_TAG = "${env.BUILD_NUMBER}"
                     env.ACR_NAME_NORMALIZED = params.ACR_NAME.trim().toLowerCase()
                     env.FULL_IMAGE = "${params.ACR_LOGIN_SERVER}/${params.IMAGE_REPO}:${env.IMAGE_TAG}"
+                    env.FRONTEND_FULL_IMAGE = "${params.ACR_LOGIN_SERVER}/${params.FRONTEND_IMAGE_REPO}:${env.IMAGE_TAG}"
                 }
                 sh '''
                   az acr login --name "$ACR_NAME_NORMALIZED"
                   docker buildx create --use --name jenkins-builder >/dev/null 2>&1 || docker buildx use jenkins-builder
                   docker buildx inspect --bootstrap
                   docker buildx build --platform linux/amd64 --provenance=false -t "$FULL_IMAGE" --push .
+                  docker buildx build --platform linux/amd64 --provenance=false -t "$FRONTEND_FULL_IMAGE" --push node-frontend/
                 '''
             }
         }
@@ -107,6 +116,21 @@ pipeline {
 
                   kubectl -n "${params.K8S_NAMESPACE}" rollout status deployment/users-api --timeout=180s
                   kubectl -n "${params.K8S_NAMESPACE}" get svc users-api -o wide
+
+                  # Deploy Node.js frontend
+                  # Create secret if it doesn't exist; update if it does
+                  kubectl -n "${params.K8S_NAMESPACE}" create secret generic node-frontend-secret \
+                    --from-literal=AUTH0_CLIENT_ID="${params.AUTH0_CLIENT_ID}" \
+                    --from-literal=AUTH0_CLIENT_SECRET="\$AUTH0_CLIENT_SECRET" \
+                    --from-literal=SESSION_SECRET="\$(openssl rand -hex 32)" \
+                    --dry-run=client -o yaml | kubectl apply -f -
+
+                  FRONTEND_BASE="${params.FRONTEND_BASE_URL}"
+                  sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g; s|__FRONTEND_IMAGE__|$FRONTEND_FULL_IMAGE|g; s|__FRONTEND_BASE_URL__|\$FRONTEND_BASE|g; s|__AUTH0_ISSUER_BASE_URL__|${params.AUTH0_ISSUER_BASE_URL}|g; s|__AUTH0_AUDIENCE__|${params.AUTH0_AUDIENCE}|g" k8s/node-frontend-deployment.yaml | kubectl apply -f -
+                  sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g" k8s/node-frontend-service.yaml | kubectl apply -f -
+
+                  kubectl -n "${params.K8S_NAMESPACE}" rollout status deployment/node-frontend --timeout=180s
+                  kubectl -n "${params.K8S_NAMESPACE}" get svc node-frontend -o wide
                 """
             }
         }

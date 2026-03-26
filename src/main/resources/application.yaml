@@ -1,6 +1,14 @@
 spring:
   application:
     name: test_agent
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://dev-s4q7d35k5uyh6r3n.eu.auth0.com/
+
+auth0:
+  audience: https://users-api
 
 server:
   port: ${PORT:8080}
