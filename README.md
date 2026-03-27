@@ -40,33 +40,43 @@
 | ส่วน | เทคโนโลยี |
 |---|---|
 | Backend | Spring Boot 4, Java 17 |
+| Frontend | Node.js + Express + express-openid-connect |
+| Authentication | Auth0 (OAuth2 Authorization Code Flow + JWT) |
 | Container | Docker (multi-stage build) |
 | Registry | Azure Container Registry (ACR) |
 | Orchestration | Azure Kubernetes Service (AKS) |
 | CI/CD | Jenkins |
 | Infrastructure | Azure |
 
-**API Endpoints:**
+**API Endpoints (ต้อง Bearer token ทุก endpoint ยกเว้น health):**
 
 ```
-GET  /api/v1/users        ดูรายชื่อ users ทั้งหมด
-GET  /api/v1/users/{id}   ดู user ตาม ID
+GET  /api/v1/users        ดูรายชื่อ users ทั้งหมด  (ต้อง JWT + email ใน allowed-emails)
+GET  /api/v1/users/{id}   ดู user ตาม ID           (ต้อง JWT + email ใน allowed-emails)
 GET  /actuator/health/readiness
 GET  /actuator/health/liveness
+```
+
+**Frontend:**
+
+```
+http://<FRONTEND_IP>/         หน้า home — login / logout / แสดง users
+http://<FRONTEND_IP>/callback  Auth0 callback URL
 ```
 
 **สิ่งที่ pipeline ทำทุกครั้งที่รัน:**
 
 ```
-1. checkout source code จาก Git
-2. รัน unit tests ด้วย Maven
-3. package เป็น JAR
-4. login Azure ด้วย Service Principal
-5. build Docker image (linux/amd64)
-6. push image ขึ้น Azure Container Registry
-7. ดึง AKS credentials
-8. apply Kubernetes manifests (namespace, deployment, service)
-9. รอจน pods พร้อม
+1.  checkout source code จาก Git
+2.  รัน unit tests ด้วย Maven
+3.  package เป็น JAR
+4.  login Azure ด้วย Service Principal
+5.  build Docker image สำหรับ Spring Boot API (linux/amd64) → push to ACR
+6.  build Docker image สำหรับ Node.js frontend → push to ACR
+7.  ดึง AKS credentials
+8.  apply Kubernetes manifests (namespace, deployment, service)
+9.  deploy node-frontend พร้อม Auth0 secrets จาก Kubernetes Secret
+10. รอจน pods พร้อม (Spring Boot + Node.js)
 ```
 
 ---
@@ -103,11 +113,17 @@ Jenkins Agent VM (Azure Ubuntu)
                                |
                            Namespace: users-api
                                |
-                           Deployment: users-api (2 replicas)
+                           Deployment: users-api (Spring Boot)
+                           Deployment: node-frontend (Node.js)
                                |
-                           Service: users-api (LoadBalancer)
+                           Service: users-api (LoadBalancer) → Spring Boot API
+                           Service: node-frontend (LoadBalancer) → Frontend UI
                                |
-                           Public IP --> อินเทอร์เน็ต
+                           Public IP → อินเทอร์เน็ต
+
+Browser → node-frontend (login Auth0) → ได้ Access Token
+        → เรียก Spring Boot API พร้อม Bearer token
+        → Spring Boot validate JWT กับ Auth0 JWKS endpoint
 ```
 
 ---
@@ -825,14 +841,41 @@ Secret = Subscription ID   (หน้า Overview)
 
 ---
 
+---
+
+### 14.4 `auth0-client-secret` — เก็บ Auth0 Client Secret
+
+**ค่านี้มาจากไหน:**
+
+```
+Auth0 Dashboard → Applications → My App → Settings
+
+Secret = Client Secret   (กด icon ตาเพื่อ reveal)
+```
+
+**ใส่ใน Jenkins:**
+
+| ฟิลด์ | ค่า |
+|---|---|
+| Kind | `Secret text` |
+| Scope | `Global` |
+| Secret | วางค่า Client Secret จาก Auth0 |
+| ID | `auth0-client-secret` |
+| Description | `Auth0 My App Client Secret` |
+
+กด **Create**
+
+---
+
 ### ตรวจสอบว่าครบ
 
-กลับไปหน้า **Credentials** → **(global)** ควรเห็นครบ 3 รายการ:
+กลับไปหน้า **Credentials** → **(global)** ควรเห็นครบ 4 รายการ:
 
 ```
 azure-sp                  Username with password
 azure-tenant-id           Secret text
 azure-subscription-id     Secret text
+auth0-client-secret       Secret text
 ```
 
 ---
@@ -869,39 +912,52 @@ azure-subscription-id     Secret text
 ### 16.1 ตรวจสอบ Checklist ก่อน Build
 
 - [ ] Jenkins Agent Node แสดงสถานะ **online** (สีเขียว)
-- [ ] Credentials ครบ 3 อัน (`azure-sp`, `azure-tenant-id`, `azure-subscription-id`)
+- [ ] Credentials ครบ 4 อัน (`azure-sp`, `azure-tenant-id`, `azure-subscription-id`, `auth0-client-secret`)
 - [ ] Service Principal มี role ครบ (`AcrPush` + `Azure Kubernetes Service Cluster User Role`)
 - [ ] AKS cluster สถานะ `Succeeded`
 - [ ] ACR สร้างเสร็จแล้ว
+- [ ] Auth0 My App มี Callback URL และ Logout URL ตรงกับ Frontend IP
 
 ### 16.2 กด Build
 
 1. เปิด Job `users-api-pipeline`
 2. กด **Build with Parameters**
-3. ตรวจสอบค่า default (ใช้ได้เลย):
+3. ตรวจสอบค่า default และกรอก Auth0 parameters:
 
 ```
-ACR_NAME             = usersapiacr
-ACR_LOGIN_SERVER     = usersapiacr.azurecr.io
-IMAGE_REPO           = users-api
-AKS_RESOURCE_GROUP   = rg-users-api
-AKS_CLUSTER_NAME     = aks-users-api
-K8S_NAMESPACE        = users-api
-ENABLE_INGRESS_TLS   = false
-INSTALL_INGRESS_STACK= false
+ACR_NAME                = usersapiacr
+ACR_LOGIN_SERVER        = usersapiacr.azurecr.io
+IMAGE_REPO              = users-api
+AKS_RESOURCE_GROUP      = rg-users-api
+AKS_CLUSTER_NAME        = aks-users-api
+K8S_NAMESPACE           = users-api
+ENABLE_INGRESS_TLS      = false
+INSTALL_INGRESS_STACK   = false
+
+# Auth0 / Frontend (ต้องกรอกเอง)
+FRONTEND_IMAGE_REPO     = node-frontend
+FRONTEND_BASE_URL       = http://<FRONTEND_EXTERNAL_IP>  ← ดูจาก deploy รอบแรก
+AUTH0_ISSUER_BASE_URL   = https://dev-s4q7d35k5uyh6r3n.eu.auth0.com
+AUTH0_AUDIENCE          = https://users-api
+AUTH0_CLIENT_ID         = VJVLUuEmBQVE7AJmwwm2HkbJkEH0vBmC
 ```
+
+> **Deploy ครั้งแรก** ปล่อย `FRONTEND_BASE_URL` ว่างไว้ก่อน → หลัง deploy ดู External IP จาก `kubectl -n users-api get svc node-frontend` → run pipeline รอบที่ 2 ใส่ IP จริง + อัปเดต Auth0 Callback URL
 
 4. กด **Build**
 
 ### 16.3 Pipeline Stages ที่จะเห็น
 
 ```
-✅ Checkout           — clone source code
-✅ Test               — ./mvnw -B clean test
-✅ Package            — ./mvnw -B package -DskipTests
-✅ Azure Login        — az login --service-principal
-✅ Build and Push     — docker buildx build + push to ACR
-✅ Deploy to AKS      — kubectl apply + rollout status
+✅ Checkout              — clone source code
+✅ Test                  — ./mvnw -B clean test
+✅ Package               — ./mvnw -B package -DskipTests
+✅ Azure Login           — az login --service-principal
+✅ Build and Push Image  — build Spring Boot image + Node.js frontend image → push to ACR
+✅ Deploy Workload       — kubectl apply: namespace, deployment, service, node-frontend-secret
+                           rollout status ทั้ง Spring Boot และ Node.js
+⬜ Install Ingress Stack — (ถ้า INSTALL_INGRESS_STACK=true)
+⬜ Deploy HTTPS Ingress  — (ถ้า ENABLE_INGRESS_TLS=true)
 ```
 
 ถ้าทุก stage เป็นสีเขียว แสดงว่า deploy สำเร็จ
@@ -1254,7 +1310,7 @@ docker run --rm -p 8080:8080 users-api:local
 **Jenkins Setup (3 อย่าง):**
 
 ```
-1. Credentials ครบ 3 อัน (azure-sp, azure-tenant-id, azure-subscription-id)
+1. Credentials ครบ 4 อัน (azure-sp, azure-tenant-id, azure-subscription-id, auth0-client-secret)
 2. Node linux-docker-agent ที่มี labels: linux docker
 3. Pipeline job ที่ใช้ Jenkinsfile จาก repo นี้
 ```
@@ -1372,13 +1428,75 @@ npm start
 
 > ต้องเพิ่ม `http://localhost:3000/callback` ใน Auth0 My App Allowed Callback URLs ก่อน
 
+### Authorization — Email Whitelist ด้วย @PreAuthorize
+
+Spring Boot ใช้ `@PreAuthorize` + SpEL ตรวจ email ของ caller ก่อนให้เข้า endpoint:
+
+```java
+// UserController.java
+@PreAuthorize("@auth0Properties.getAllowedEmails().get(0) == authentication.principal.claims['email']")
+public List<User> getUsers() { ... }
+```
+
+- `@auth0Properties` — Spring Bean ชื่อ `auth0Properties` (class `Auth0Properties`)
+- `getAllowedEmails()` — return `List<String>` จาก `application.yaml`
+- `authentication.principal.claims['email']` — claim จาก JWT ที่ Auth0 inject ผ่าน Post Login Action
+- ถ้า email ไม่ตรง → Spring던ว่า `AccessDeniedException` → `ApiExceptionHandler` จับ → return 403
+
+**เพิ่ม/แก้ email ที่อนุญาต:**
+
+```yaml
+# src/main/resources/application.yaml
+auth0:
+  audience: https://users-api
+  allowed-emails:
+    - your@email.com
+    - another@email.com
+```
+
+### Auth0 Post Login Action (inject claims เข้า Access Token)
+
+ต้องตั้งค่า Action ใน Auth0 เพื่อให้ `name` และ `email` ปรากฏใน JWT:
+
+1. Auth0 Dashboard → **Actions** → **Flows** → **Login**
+2. กด **+** → **Build Custom** → ชื่อ `Inject User Claims`
+3. ใส่ code:
+
+```js
+exports.onExecutePostLogin = async (event, api) => {
+  api.accessToken.setCustomClaim('name',  event.user.name);
+  api.accessToken.setCustomClaim('email', event.user.email);
+};
+```
+
+4. **Deploy** → ลาก Action เข้า Login flow → **Apply**
+
+### Logging
+
+ทุก request ที่ผ่านการ authenticate จะถูก log โดย `JwtLoggingFilter`:
+
+```
+[JWT] Request authenticated — method=GET uri=/api/v1/users sub=auth0|xxx name=John email=john@example.com scope=openid profile email
+```
+
+ถ้า access denied จะ log ที่ `ApiExceptionHandler`:
+
+```
+[AUTH] Access denied — email=unauthorized@example.com
+```
+
 ### ไฟล์ที่เกี่ยวข้อง
 
 ```
-src/main/java/.../security/SecurityConfig.java   ← JWT validation config
-src/main/resources/application.yaml             ← Auth0 issuer URI + audience
-node-frontend/server.js                         ← Express + Auth0 login
-node-frontend/Dockerfile                        ← Container image
-k8s/node-frontend-deployment.yaml              ← AKS deployment
-k8s/node-frontend-service.yaml                 ← LoadBalancer service
+src/main/java/.../security/SecurityConfig.java    ← JWT decoder + audience validator
+src/main/java/.../security/Auth0Properties.java   ← bind allowed-emails จาก YAML
+src/main/java/.../security/JwtLoggingFilter.java  ← log ทุก authenticated request
+src/main/java/.../user/UserController.java        ← @PreAuthorize email check
+src/main/java/.../user/ApiExceptionHandler.java   ← handle 403 + log email
+src/main/resources/application.yaml              ← Auth0 issuer URI + audience + allowed-emails
+node-frontend/server.js                          ← Express + Auth0 login + เรียก API
+node-frontend/Dockerfile                         ← Container image
+k8s/node-frontend-deployment.yaml               ← AKS deployment
+k8s/node-frontend-service.yaml                  ← LoadBalancer service
+k8s/node-frontend-secret.yaml                   ← Kubernetes Secret สำหรับ Auth0 credentials
 ```

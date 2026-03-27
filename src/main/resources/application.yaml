@@ -9,6 +9,8 @@ spring:
 
 auth0:
   audience: https://users-api
+  allowed-emails:
+    - patiparn.kij@gmail.com
 
 server:
   port: ${PORT:8080}

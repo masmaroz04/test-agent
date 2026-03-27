@@ -118,12 +118,7 @@ pipeline {
                   kubectl -n "${params.K8S_NAMESPACE}" get svc users-api -o wide
 
                   # Deploy Node.js frontend
-                  # Create secret if it doesn't exist; update if it does
-                  kubectl -n "${params.K8S_NAMESPACE}" create secret generic node-frontend-secret \
-                    --from-literal=AUTH0_CLIENT_ID="${params.AUTH0_CLIENT_ID}" \
-                    --from-literal=AUTH0_CLIENT_SECRET="\$AUTH0_CLIENT_SECRET" \
-                    --from-literal=SESSION_SECRET="\$(openssl rand -hex 32)" \
-                    --dry-run=client -o yaml | kubectl apply -f -
+                  sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g; s|__AUTH0_CLIENT_ID__|${params.AUTH0_CLIENT_ID}|g; s|__AUTH0_CLIENT_SECRET__|\$AUTH0_CLIENT_SECRET|g; s|__SESSION_SECRET__|\$(openssl rand -hex 32)|g" k8s/node-frontend-secret.yaml | kubectl apply -f -
 
                   FRONTEND_BASE="${params.FRONTEND_BASE_URL}"
                   sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g; s|__FRONTEND_IMAGE__|$FRONTEND_FULL_IMAGE|g; s|__FRONTEND_BASE_URL__|\$FRONTEND_BASE|g; s|__AUTH0_ISSUER_BASE_URL__|${params.AUTH0_ISSUER_BASE_URL}|g; s|__AUTH0_AUDIENCE__|${params.AUTH0_AUDIENCE}|g" k8s/node-frontend-deployment.yaml | kubectl apply -f -

@@ -47,7 +47,7 @@ app.get('/users', requiresAuth(), async (req, res) => {
 
     const users = response.data;
     const rows = users.map(u =>
-      `<tr><td>${u.id}</td><td>${u.firstName}</td><td>${u.lastName}</td><td>${u.email}</td></tr>`
+      `<tr><td>${u.id}</td><td>${u.fullName}</td><td>${u.email}</td></tr>`
     ).join('');
 
     res.send(`
@@ -56,7 +56,7 @@ app.get('/users', requiresAuth(), async (req, res) => {
         <p>Hello, ${req.oidc.user.name} &nbsp;|&nbsp; <a href="/logout">Log Out</a></p>
         <table border="1" cellpadding="8" cellspacing="0" style="width:100%;border-collapse:collapse">
           <thead style="background:#f0f0f0">
-            <tr><th>ID</th><th>First Name</th><th>Last Name</th><th>Email</th></tr>
+            <tr><th>ID</th><th>Full Name</th><th>Email</th></tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
@@ -64,6 +64,15 @@ app.get('/users', requiresAuth(), async (req, res) => {
     `);
   } catch (err) {
     const status = err.response?.status;
+    if (status === 403) {
+      return res.status(403).send(`
+        <html><body style="font-family:sans-serif;max-width:600px;margin:80px auto;text-align:center">
+          <h2>Access Denied</h2>
+          <p>Your account (<strong>${req.oidc.user.email}</strong>) is not authorized to access this application.</p>
+          <a href="/logout" style="padding:10px 24px;background:#e53e3e;color:white;text-decoration:none;border-radius:6px">Log Out</a>
+        </body></html>
+      `);
+    }
     const msg = status === 401 ? 'Unauthorized — token issue' : `Error calling API: ${err.message}`;
     res.status(500).send(`<p style="color:red">${msg}</p><a href="/">Back</a>`);
   }
