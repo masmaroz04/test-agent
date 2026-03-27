@@ -1,6 +1,4 @@
 HELP.md
-node-frontend/.env
-node-frontend/node_modules/
 target/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
@@ -33,3 +31,7 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Node.js frontend ###
+node-frontend/.env
+node-frontend/node_modules/
