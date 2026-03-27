@@ -25,7 +25,7 @@ pipeline {
         string(name: 'CERT_MANAGER_MANIFEST_URL', defaultValue: 'https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml', description: 'cert-manager install manifest URL')
         // Node.js frontend parameters
         string(name: 'FRONTEND_IMAGE_REPO', defaultValue: 'node-frontend', description: 'Repository name in ACR for Node.js frontend')
-        string(name: 'FRONTEND_BASE_URL', defaultValue: '', description: 'Public base URL of the frontend, e.g. http://<EXTERNAL-IP>')
+        string(name: 'FRONTEND_BASE_URL', defaultValue: 'http://23.98.126.205', description: 'Public base URL of the frontend, e.g. http://<EXTERNAL-IP>')
         string(name: 'AUTH0_ISSUER_BASE_URL', defaultValue: 'https://dev-s4q7d35k5uyh6r3n.eu.auth0.com', description: 'Auth0 issuer base URL (no trailing slash)')
         string(name: 'AUTH0_AUDIENCE', defaultValue: 'https://users-api', description: 'Auth0 API audience identifier')
         string(name: 'AUTH0_CLIENT_ID', defaultValue: 'VJVLUuEmBQVE7AJmwwm2HkbJkEH0vBmC', description: 'Auth0 Regular Web App Client ID')
