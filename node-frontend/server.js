@@ -78,4 +78,8 @@ app.get('/users', requiresAuth(), async (req, res) => {
   }
 });
 
+app.get('/token', requiresAuth(), (req, res) => {
+  res.send(`<pre>${req.oidc.accessToken?.access_token}</pre>`);
+});
+
 app.listen(port, () => console.log(`Frontend running on port ${port}`));
