@@ -28,6 +28,7 @@
 20. [ปัญหาที่เจอบ่อยและวิธีแก้](#20-ปัญหาที่เจอบ่อยและวิธีแก้)
 21. [คำสั่งที่ใช้บ่อย](#21-คำสั่งที่ใช้บ่อย)
 22. [Auth0 Authentication](#22-auth0-authentication)
+23. [Monitoring — Prometheus + Grafana + Loki](#23-monitoring--prometheus--grafana--loki)
 
 ---
 
@@ -47,6 +48,7 @@
 | Orchestration | Azure Kubernetes Service (AKS) |
 | CI/CD | Jenkins |
 | Infrastructure | Azure |
+| Monitoring | Prometheus + Grafana + Loki |
 
 **API Endpoints (ต้อง Bearer token ทุก endpoint ยกเว้น health):**
 
@@ -1500,3 +1502,138 @@ k8s/node-frontend-deployment.yaml               ← AKS deployment
 k8s/node-frontend-service.yaml                  ← LoadBalancer service
 k8s/node-frontend-secret.yaml                   ← Kubernetes Secret สำหรับ Auth0 credentials
 ```
+
+---
+
+## 23. Monitoring — Prometheus + Grafana + Loki
+
+### ภาพรวม
+
+```
+[users-api /actuator/prometheus] ─┐
+[node-frontend /metrics]          ├──► Prometheus (metrics) ──► Grafana Dashboard
+[K8s cluster metrics]            ─┘
+
+[users-api stdout logs]    ─┐
+[node-frontend stdout logs] ├──► Promtail ──► Loki (logs) ──► Grafana Explore
+[K8s system logs]          ─┘
+```
+
+### Stack
+
+| Component | หน้าที่ |
+|---|---|
+| **Prometheus** | scrape และเก็บ metrics ตัวเลข |
+| **Grafana** | Dashboard UI แสดง metrics และ logs |
+| **Loki** | เก็บ logs จากทุก pod |
+| **Promtail** | ดึง logs จากทุก pod ส่งให้ Loki |
+| **Alertmanager** | ส่ง alert เมื่อ metric ผิดปกติ |
+
+### สิ่งที่เพิ่มใน Project
+
+**pom.xml** — เพิ่ม Micrometer Prometheus dependency:
+```xml
+<dependency>
+    <groupId>io.micrometer</groupId>
+    <artifactId>micrometer-registry-prometheus</artifactId>
+</dependency>
+```
+
+**application.yaml** — เปิด `/actuator/prometheus` endpoint:
+```yaml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+```
+
+**k8s/deployment.yaml และ k8s/node-frontend-deployment.yaml** — เพิ่ม Prometheus scrape annotations:
+```yaml
+annotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/path: "/actuator/prometheus"   # หรือ /metrics สำหรับ Node.js
+  prometheus.io/port: "8080"                   # หรือ 3000 สำหรับ Node.js
+```
+
+**node-frontend/server.js** — เพิ่ม `/metrics` endpoint ด้วย `prom-client`
+
+### ติดตั้ง Monitoring Stack บน AKS
+
+SSH เข้า Jenkins Agent VM แล้วรัน:
+
+```bash
+# 1. ติดตั้ง Helm
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# 2. เพิ่ม Helm repos
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo add grafana https://grafana.github.io/helm-charts
+helm repo update
+
+# 3. ติดตั้ง Prometheus + Grafana + Alertmanager
+helm install monitoring prometheus-community/kube-prometheus-stack \
+  --namespace monitoring \
+  --create-namespace \
+  --set prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues=false \
+  --set prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false
+
+# 4. ติดตั้ง Loki
+helm install loki grafana/loki \
+  --namespace monitoring \
+  --set loki.auth_enabled=false \
+  --set loki.commonConfig.replication_factor=1 \
+  --set loki.storage.type=filesystem \
+  --set singleBinary.replicas=1 \
+  --set deploymentMode=SingleBinary \
+  --set backend.replicas=0 \
+  --set read.replicas=0 \
+  --set write.replicas=0 \
+  --set loki.useTestSchema=true
+
+# 5. ติดตั้ง Promtail (ดึง log จากทุก pod)
+helm install promtail grafana/promtail \
+  --namespace monitoring \
+  --set config.lokiAddress=http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push
+
+# 6. เช็ค pods
+kubectl get pods -n monitoring
+```
+
+### เข้า Grafana
+
+```bash
+# Port-forward (รันค้างไว้)
+kubectl port-forward -n monitoring svc/monitoring-grafana 3001:80 &
+```
+
+เปิด browser: `http://localhost:3001`
+- Username: `admin`
+- Password: `prom-operator`
+
+### ตั้งค่า Loki Datasource
+
+1. **Connections → Data sources → Add data source → Loki**
+2. URL: `http://loki-gateway.monitoring.svc.cluster.local`
+3. กด **Save & Test**
+
+### Import Dashboard สำเร็จรูป
+
+**Dashboards → New → Import** แล้วใส่ ID:
+
+| Dashboard ID | แสดงอะไร |
+|---|---|
+| **315** | Kubernetes cluster overview |
+| **4701** | JVM (Spring Boot) — heap, GC, threads |
+| **11159** | Node.js — memory, event loop, requests |
+
+### ดู Logs ใน Grafana
+
+1. **Explore** → เลือก datasource **Loki**
+2. ใส่ query:
+
+```
+{namespace="users-api"}
+```
+
+จะเห็น log จากทั้ง `users-api` และ `node-frontend` แบบ real-time
