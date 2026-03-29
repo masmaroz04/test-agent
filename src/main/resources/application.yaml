@@ -12,13 +12,10 @@ spring:
     password: ${DB_PASSWORD:}
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: validate
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
-  sql:
-    init:
-      mode: always
 
 auth0:
   audience: https://users-api
