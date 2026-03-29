@@ -122,7 +122,7 @@ pipeline {
                   sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g; s|__IMAGE__|$FULL_IMAGE|g" k8s/deployment.yaml | kubectl apply -f -
                   sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g" k8s/service.yaml | kubectl apply -f -
 
-                  kubectl -n "${params.K8S_NAMESPACE}" rollout status deployment/users-api --timeout=180s
+                  kubectl -n "${params.K8S_NAMESPACE}" rollout status deployment/users-api --timeout=360s
                   kubectl -n "${params.K8S_NAMESPACE}" get svc users-api -o wide
 
                   # Deploy Node.js frontend
