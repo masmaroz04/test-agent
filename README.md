@@ -29,6 +29,7 @@
 21. [คำสั่งที่ใช้บ่อย](#21-คำสั่งที่ใช้บ่อย)
 22. [Auth0 Authentication](#22-auth0-authentication)
 23. [Monitoring — Prometheus + Grafana + Loki](#23-monitoring--prometheus--grafana--loki)
+24. [Database — PostgreSQL บน AKS](#24-database--postgresql-บน-aks)
 
 ---
 
@@ -49,6 +50,7 @@
 | CI/CD | Jenkins |
 | Infrastructure | Azure |
 | Monitoring | Prometheus + Grafana + Loki |
+| Database | PostgreSQL 16 (pod ใน AKS) |
 
 **API Endpoints (ต้อง Bearer token ทุก endpoint ยกเว้น health):**
 
@@ -1637,3 +1639,103 @@ kubectl port-forward -n monitoring svc/monitoring-grafana 3001:80 &
 ```
 
 จะเห็น log จากทั้ง `users-api` และ `node-frontend` แบบ real-time
+
+---
+
+## 24. Database — PostgreSQL บน AKS
+
+### ภาพรวม
+
+```
+[users-api pod] ──connect──► [postgres pod]
+  Java / Spring Data JPA        PostgreSQL 16
+  deployment.yaml               postgres-deployment.yaml
+```
+
+PostgreSQL รันเป็น pod ใน AKS cluster เดียวกัน ไม่ต้องสร้าง Azure resource เพิ่ม
+
+### ไฟล์ที่เกี่ยวข้อง
+
+| ไฟล์ | หน้าที่ |
+|---|---|
+| `k8s/postgres-secret.yaml` | เก็บ DB name, username, password |
+| `k8s/postgres-deployment.yaml` | deploy postgres pod (image: postgres:16-alpine จาก Docker Hub) |
+| `k8s/postgres-service.yaml` | ClusterIP service ให้ users-api connect ได้ |
+| `src/main/resources/data.sql` | seed ข้อมูล users เริ่มต้น |
+
+### K8s Manifests
+
+**postgres-secret.yaml** — เก็บ credentials:
+```yaml
+stringData:
+  POSTGRES_DB: usersdb
+  POSTGRES_USER: usersapp
+  POSTGRES_PASSWORD: __POSTGRES_PASSWORD__   ← Jenkins inject ตอน deploy
+```
+
+**postgres-service.yaml** — internal DNS:
+```
+postgres.users-api.svc.cluster.local:5432
+# users-api ใช้แค่ "postgres" เป็น DB_HOST ก็พอ
+```
+
+### Environment Variables ใน users-api
+
+```yaml
+- name: DB_HOST
+  value: postgres                # ชื่อ K8s service
+- name: DB_NAME
+  valueFrom:
+    secretKeyRef:
+      name: postgres-secret
+      key: POSTGRES_DB
+- name: DB_USER
+  valueFrom:
+    secretKeyRef:
+      name: postgres-secret
+      key: POSTGRES_USER
+- name: DB_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: postgres-secret
+      key: POSTGRES_PASSWORD
+```
+
+### Jenkins Parameter
+
+ตอน **Build with Parameters** จะมีช่อง:
+```
+POSTGRES_PASSWORD = usersapp   (default)
+```
+
+### เชื่อม DBeaver จาก Windows
+
+Deploy เสร็จแล้วทำตามขั้นตอน:
+
+**1. port-forward บน VM:**
+```bash
+kubectl port-forward -n users-api svc/postgres 5433:5432
+```
+
+**2. SSH tunnel จาก Windows (terminal ใหม่):**
+```bash
+ssh -i "C:\Users\patip\Downloads\jenkins-linux-agent_key.pem" -L 5433:localhost:5433 azureuser@20.212.32.185
+```
+
+**3. DBeaver connection:**
+```
+Host:     localhost
+Port:     5433
+Database: usersdb
+User:     usersapp
+Password: usersapp
+```
+
+### Seed Data
+
+```sql
+-- src/main/resources/data.sql (รันอัตโนมัติตอน start)
+INSERT INTO users (full_name, email) VALUES ('Alice Johnson', 'alice@example.com') ON CONFLICT DO NOTHING;
+INSERT INTO users (full_name, email) VALUES ('Bob Smith', 'bob@example.com') ON CONFLICT DO NOTHING;
+INSERT INTO users (full_name, email) VALUES ('Charlie Brown', 'charlie@example.com') ON CONFLICT DO NOTHING;
+```

@@ -29,6 +29,7 @@ pipeline {
         string(name: 'AUTH0_ISSUER_BASE_URL', defaultValue: 'https://dev-s4q7d35k5uyh6r3n.eu.auth0.com', description: 'Auth0 issuer base URL (no trailing slash)')
         string(name: 'AUTH0_AUDIENCE', defaultValue: 'https://users-api', description: 'Auth0 API audience identifier')
         string(name: 'AUTH0_CLIENT_ID', defaultValue: 'VJVLUuEmBQVE7AJmwwm2HkbJkEH0vBmC', description: 'Auth0 Regular Web App Client ID')
+        password(name: 'POSTGRES_PASSWORD', defaultValue: 'usersapp', description: 'PostgreSQL password for usersapp user')
     }
 
     environment {
@@ -111,6 +112,13 @@ pipeline {
                     --overwrite-existing
 
                   sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g" k8s/namespace.yaml | kubectl apply -f -
+
+                  # Deploy PostgreSQL
+                  sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g; s|__POSTGRES_PASSWORD__|${params.POSTGRES_PASSWORD}|g" k8s/postgres-secret.yaml | kubectl apply -f -
+                  sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g" k8s/postgres-deployment.yaml | kubectl apply -f -
+                  sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g" k8s/postgres-service.yaml | kubectl apply -f -
+                  kubectl -n "${params.K8S_NAMESPACE}" rollout status deployment/postgres --timeout=60s
+
                   sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g; s|__IMAGE__|$FULL_IMAGE|g" k8s/deployment.yaml | kubectl apply -f -
                   sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g" k8s/service.yaml | kubectl apply -f -
 

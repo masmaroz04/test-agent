@@ -15,6 +15,21 @@ auth0:
 server:
   port: ${PORT:8080}
 
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:5432/${DB_NAME:usersdb}
+    username: ${DB_USER:usersapp}
+    password: ${DB_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  sql:
+    init:
+      mode: always
+
 management:
   endpoints:
     web:
