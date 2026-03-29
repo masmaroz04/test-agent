@@ -25,7 +25,7 @@
 17. [เช็กหลัง Deploy](#17-เช็กหลัง-deploy)
 18. [ทดสอบ API](#18-ทดสอบ-api)
 19. [เปิด HTTPS (ตัวเลือกเสริม)](#19-เปิด-https-ตัวเลือกเสริม)
-20. [ปัญหาที่เจอบ่อยและวิธีแก้](#20-ปัญหาที่เจอบ่อยและวิธีแก้)
+20. [ปัญหาที่เจอบ่อยและวิธีแก้](#20-ปัญหาที่เจอบ่อยและวิธีแก้) (รวม OOMKilled, Flyway, Debug Pod)
 21. [คำสั่งที่ใช้บ่อย](#21-คำสั่งที่ใช้บ่อย)
 22. [Auth0 Authentication](#22-auth0-authentication)
 23. [Monitoring — Prometheus + Grafana + Loki](#23-monitoring--prometheus--grafana--loki)
@@ -1213,6 +1213,71 @@ nohup java -jar agent.jar \
 
 รอ agent reconnect แล้ว Build ใหม่ใน Jenkins
 
+### 20.8 Pod `OOMKilled` — memory เกิน limit
+
+```bash
+# เช็กสาเหตุที่ pod ตาย
+kubectl -n users-api get pod <pod-name> \
+  -o jsonpath='{.status.containerStatuses[0].lastState.terminated}' && echo
+```
+
+ถ้าเห็น `"reason":"OOMKilled"` และ `"exitCode":137` แปลว่า memory limit ต่ำเกินไป
+
+**แก้ใน `k8s/deployment.yaml`:**
+```yaml
+resources:
+  requests:
+    memory: 512Mi
+  limits:
+    memory: 768Mi   # Spring Boot 4 + JPA + Flyway ต้องการ ≥ 512Mi
+```
+
+### 20.9 Flyway ไม่รัน (Spring Boot 4)
+
+**อาการ:** `ERROR: relation "users" does not exist` แม้ config ถูกต้อง
+
+**สาเหตุ:** Spring Boot 4 แยก Flyway auto-configuration ออกเป็น module ต่างหาก ต้องเพิ่มใน `pom.xml`:
+
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-flyway</artifactId>
+</dependency>
+```
+
+**ตรวจสอบว่า Flyway รันหรือไม่:**
+```bash
+kubectl -n users-api logs deployment/users-api 2>&1 | grep -i flyway
+# ควรเห็น: Successfully applied 2 migrations to schema "public"
+```
+
+### 20.10 วิธี Debug Pod ที่ไม่รัน
+
+```bash
+# 1. เช็ค status และ restart count
+kubectl -n users-api get pods
+
+# 2. ดู events และ probe status
+kubectl -n users-api describe pod <pod-name>
+
+# 3. ดู logs ปัจจุบัน
+kubectl -n users-api logs <pod-name>
+
+# 4. ดู logs จาก run ก่อน restart
+kubectl -n users-api logs <pod-name> --previous
+
+# 5. เช็คสาเหตุที่ container ตาย
+kubectl -n users-api get pod <pod-name> \
+  -o jsonpath='{.status.containerStatuses[0].lastState.terminated}' && echo
+```
+
+| สถานะ | สาเหตุที่พบบ่อย | วิธีเช็ค |
+|-------|----------------|----------|
+| `CrashLoopBackOff` | app crash ซ้ำ | `logs --previous` |
+| `OOMKilled` (exitCode 137) | memory เกิน limit | `lastState.terminated` |
+| `0/1 Running` นาน | readiness probe fail หรือ app start ช้า | `describe pod` → Events |
+| `Pending` | node resource ไม่พอ | `describe pod` → Events |
+
 ---
 
 ## 21. คำสั่งที่ใช้บ่อย
@@ -1661,7 +1726,8 @@ PostgreSQL รันเป็น pod ใน AKS cluster เดียวกัน
 | `k8s/postgres-secret.yaml` | เก็บ DB name, username, password |
 | `k8s/postgres-deployment.yaml` | deploy postgres pod (image: postgres:16-alpine จาก Docker Hub) |
 | `k8s/postgres-service.yaml` | ClusterIP service ให้ users-api connect ได้ |
-| `src/main/resources/data.sql` | seed ข้อมูล users เริ่มต้น |
+| `src/main/resources/db/migration/V1__create_users_table.sql` | สร้าง table users |
+| `src/main/resources/db/migration/V2__seed_users.sql` | seed ข้อมูลเริ่มต้น |
 
 ### K8s Manifests
 
