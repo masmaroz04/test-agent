@@ -1731,11 +1731,37 @@ User:     usersapp
 Password: usersapp
 ```
 
-### Seed Data
+### Flyway Database Migrations
 
-```sql
--- src/main/resources/data.sql (รันอัตโนมัติตอน start)
-INSERT INTO users (full_name, email) VALUES ('Alice Johnson', 'alice@example.com') ON CONFLICT DO NOTHING;
-INSERT INTO users (full_name, email) VALUES ('Bob Smith', 'bob@example.com') ON CONFLICT DO NOTHING;
-INSERT INTO users (full_name, email) VALUES ('Charlie Brown', 'charlie@example.com') ON CONFLICT DO NOTHING;
+ใช้ Flyway แทน `data.sql` เพื่อ track schema version และ seed data
+
+**ไฟล์ migration อยู่ที่:**
 ```
+src/main/resources/db/migration/
+  V1__create_users_table.sql   ← สร้าง table
+  V2__seed_users.sql           ← seed ข้อมูลเริ่มต้น
+```
+
+**การทำงาน:**
+```
+Deploy ทุกครั้ง → Flyway เช็ค flyway_schema_history ใน DB ก่อน
+  → version ที่รันแล้ว → ข้าม
+  → version ใหม่ที่ยังไม่รัน → รัน แล้วบันทึกใน history
+```
+
+**ตัวอย่าง flyway_schema_history (สร้างอัตโนมัติตอน deploy ครั้งแรก):**
+```
+version | description          | success
+--------|----------------------|--------
+1       | create users table   | true
+2       | seed users           | true
+```
+
+**เพิ่ม column ในอนาคต:**
+```sql
+-- สร้างไฟล์ใหม่ V3__add_phone_column.sql
+ALTER TABLE users ADD COLUMN phone VARCHAR(20);
+```
+Flyway จะรัน V3 แค่ครั้งเดียว V1, V2 ไม่โดนรันซ้ำ
+
+**กฎสำคัญ:** ห้ามแก้ไขไฟล์ V1, V2 ที่รันไปแล้ว — ถ้าอยากแก้ไขให้สร้าง version ใหม่เสมอ
