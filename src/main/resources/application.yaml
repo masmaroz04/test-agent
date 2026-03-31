@@ -23,6 +23,9 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}  # ใช้ env var REDIS_HOST ถ้าไม่มีใช้ localhost
       port: 6379
+  cache:
+    redis:
+      time-to-live: 300000  # TTL = 300,000 ms = 5 นาที — หลังจากนี้ cache หมดอายุ Spring ดึงจาก DB ใหม่
 
 auth0:
   audience: https://users-api
