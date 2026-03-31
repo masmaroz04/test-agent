@@ -31,6 +31,7 @@
 23. [Monitoring — Prometheus + Grafana + Loki](#23-monitoring--prometheus--grafana--loki)
 24. [Database — PostgreSQL บน AKS](#24-database--postgresql-บน-aks)
 25. [ทำความเข้าใจ Architecture — อะไรอยู่ที่ไหน](#25-ทำความเข้าใจ-architecture--อะไรอยู่ที่ไหน)
+26. [Redis — Cache บน AKS](#26-redis--cache-บน-aks)
 
 ---
 
@@ -1956,4 +1957,109 @@ pods (ทุกตัว)
       Loki
         │
    Grafana → ค้นหา logs
+```
+
+---
+
+## 26. Redis — Cache บน AKS
+
+### ทำไมต้องอยู่ใน Project (ไม่ใช่ Helm)
+
+Redis เป็น **dependency ของ app** เหมือน PostgreSQL — app ต้องการ connect จึงต้องอยู่ใน `k8s/` และ deploy ผ่าน Jenkinsfile
+
+### ไฟล์ที่เพิ่ม
+
+| ไฟล์ | หน้าที่ |
+|---|---|
+| `k8s/redis-deployment.yaml` | deploy Redis pod (image: redis:7-alpine) |
+| `k8s/redis-service.yaml` | ClusterIP service ให้ users-api connect ด้วยชื่อ `redis` |
+
+### อธิบาย redis-deployment.yaml
+
+```yaml
+apiVersion: apps/v1        # API version สำหรับ Deployment
+kind: Deployment           # ประเภท resource — จัดการ pods ให้รันตลอด
+metadata:
+  name: redis
+  namespace: __NAMESPACE__ # Jenkins replace เป็น "users-api" ตอน deploy
+spec:
+  replicas: 1              # 1 pod พอ (Redis ไม่ต้อง HA แบบ app)
+  selector:
+    matchLabels:
+      app: redis           # Deployment ดูแล pods ที่มี label app=redis
+  template:
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine          # Redis 7 บน Alpine (image เล็ก ~30MB)
+        ports:
+        - containerPort: 6379         # port มาตรฐานของ Redis
+        resources:
+          requests:
+            cpu: 50m                  # ขอ CPU ขั้นต่ำ 0.05 core
+            memory: 64Mi              # ขอ memory ขั้นต่ำ 64MB
+          limits:
+            cpu: 200m                 # จำกัด CPU สูงสุด 0.2 core
+            memory: 128Mi             # จำกัด memory สูงสุด 128MB
+        readinessProbe:
+          tcpSocket:
+            port: 6379                # เช็คว่า Redis รับ connection ได้
+          initialDelaySeconds: 5      # รอ 5s หลัง start แล้วค่อยเช็ค
+          periodSeconds: 10           # เช็คทุก 10s
+```
+
+### อธิบาย redis-service.yaml
+
+```yaml
+apiVersion: v1             # Service ใช้ core API (v1)
+kind: Service
+metadata:
+  name: redis              # ชื่อ Service = DNS name ภายใน cluster
+                           # users-api connect ได้ด้วย "redis:6379"
+spec:
+  selector:
+    app: redis             # ส่ง traffic ไปยัง pods ที่มี label app=redis
+  ports:
+  - port: 6379             # port ที่รับ (ที่ users-api จะ connect)
+    targetPort: 6379       # port ที่ Redis pod ฟังอยู่
+```
+
+### การทำงานภายใน Cluster
+
+```
+users-api pod
+    │
+    │  connect "redis:6379"   ← K8s DNS resolve ชื่อ Service
+    ▼
+redis Service (ClusterIP)
+    │
+    ▼
+redis pod (redis:7-alpine)
+```
+
+### Config ใน Spring Boot
+
+**application.yaml:**
+```yaml
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}  # ใช้ env var ถ้าไม่มีใช้ localhost (local dev)
+      port: 6379
+```
+
+**deployment.yaml:**
+```yaml
+env:
+- name: REDIS_HOST
+  value: redis    # ชื่อ K8s Service = DNS name ภายใน cluster
+```
+
+### Jenkins Deploy Order
+
+```
+1. Deploy PostgreSQL  → รอ ready
+2. Deploy Redis       → รอ ready   ← เพิ่มใหม่
+3. Deploy users-api   → รอ ready
+4. Deploy node-frontend
 ```

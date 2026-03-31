@@ -1,0 +1,34 @@
+apiVersion: apps/v1        # บอกว่าใช้ API version ไหนของ K8s (Deployment ต้องใช้ apps/v1)
+kind: Deployment           # ประเภท resource = Deployment (จัดการ pods ให้รันตลอด)
+metadata:
+  name: redis              # ชื่อ Deployment ใช้อ้างอิงใน kubectl
+  namespace: __NAMESPACE__ # Jenkins จะ replace เป็น "users-api" ตอน deploy
+  labels:
+    app: redis             # label สำหรับ group pods — ใช้คู่กับ selector
+spec:
+  replicas: 1              # รัน 1 pod พอ (Redis ไม่ต้องการ HA แบบ app)
+  selector:
+    matchLabels:
+      app: redis           # Deployment จะดูแล pods ที่มี label app=redis
+  template:                # template สำหรับสร้าง pod
+    metadata:
+      labels:
+        app: redis         # ทุก pod ที่สร้างจะได้ label นี้
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine          # Redis 7 บน Alpine Linux (image เล็ก)
+        ports:
+        - containerPort: 6379         # port มาตรฐานของ Redis
+        resources:
+          requests:
+            cpu: 50m                  # ขอ CPU ขั้นต่ำ 0.05 core
+            memory: 64Mi              # ขอ memory ขั้นต่ำ 64MB
+          limits:
+            cpu: 200m                 # จำกัด CPU สูงสุด 0.2 core
+            memory: 128Mi             # จำกัด memory สูงสุด 128MB
+        readinessProbe:
+          tcpSocket:
+            port: 6379                # เช็คว่า Redis รับ connection ที่ port 6379 ได้
+          initialDelaySeconds: 5      # รอ 5 วินาทีหลัง container start แล้วค่อยเช็ค
+          periodSeconds: 10           # เช็คทุก 10 วินาที

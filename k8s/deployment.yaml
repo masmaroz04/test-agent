@@ -27,6 +27,8 @@ spec:
         env:
         - name: SPRING_PROFILES_ACTIVE
           value: prod
+        - name: REDIS_HOST
+          value: redis       # ชื่อ K8s Service ของ Redis = DNS name ภายใน cluster
         - name: DB_HOST
           value: postgres
         - name: DB_NAME

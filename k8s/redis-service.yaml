@@ -1,0 +1,11 @@
+apiVersion: v1             # Service ใช้ core API (v1) ไม่ใช่ apps/v1
+kind: Service              # ประเภท resource = Service (ให้ pods อื่น connect ได้)
+metadata:
+  name: redis              # ชื่อ Service = DNS name ที่ใช้ connect เช่น redis:6379
+  namespace: __NAMESPACE__ # Jenkins replace เป็น "users-api"
+spec:
+  selector:
+    app: redis             # ส่ง traffic ไปยัง pods ที่มี label app=redis
+  ports:
+  - port: 6379             # port ที่ Service รับ (ที่ users-api จะ connect)
+    targetPort: 6379       # port ที่ Redis pod ฟังอยู่ (ส่งต่อไปที่นี่)

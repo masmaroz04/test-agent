@@ -119,6 +119,11 @@ pipeline {
                   sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g" k8s/postgres-service.yaml | kubectl apply -f -
                   kubectl -n "${params.K8S_NAMESPACE}" rollout status deployment/postgres --timeout=60s
 
+                  # Deploy Redis
+                  sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g" k8s/redis-deployment.yaml | kubectl apply -f -
+                  sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g" k8s/redis-service.yaml | kubectl apply -f -
+                  kubectl -n "${params.K8S_NAMESPACE}" rollout status deployment/redis --timeout=60s
+
                   sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g; s|__IMAGE__|$FULL_IMAGE|g" k8s/deployment.yaml | kubectl apply -f -
                   sed "s|__NAMESPACE__|${params.K8S_NAMESPACE}|g" k8s/service.yaml | kubectl apply -f -
 
