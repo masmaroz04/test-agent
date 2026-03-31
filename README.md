@@ -30,6 +30,7 @@
 22. [Auth0 Authentication](#22-auth0-authentication)
 23. [Monitoring — Prometheus + Grafana + Loki](#23-monitoring--prometheus--grafana--loki)
 24. [Database — PostgreSQL บน AKS](#24-database--postgresql-บน-aks)
+25. [ทำความเข้าใจ Architecture — อะไรอยู่ที่ไหน](#25-ทำความเข้าใจ-architecture--อะไรอยู่ที่ไหน)
 
 ---
 
@@ -1831,3 +1832,128 @@ ALTER TABLE users ADD COLUMN phone VARCHAR(20);
 Flyway จะรัน V3 แค่ครั้งเดียว V1, V2 ไม่โดนรันซ้ำ
 
 **กฎสำคัญ:** ห้ามแก้ไขไฟล์ V1, V2 ที่รันไปแล้ว — ถ้าอยากแก้ไขให้สร้าง version ใหม่เสมอ
+
+---
+
+## 25. ทำความเข้าใจ Architecture — อะไรอยู่ที่ไหน
+
+### อะไรต้องอยู่ใน Project (k8s/ folder)
+
+ทุก resource ที่โปรเจคเราควบคุมและเปลี่ยนแปลงได้ตาม requirement ต้องมี yaml ใน `k8s/`
+
+```
+k8s/
+├── namespace.yaml                  # สร้าง namespace users-api
+├── deployment.yaml                 # users-api — เปลี่ยนบ่อย (image, env, resources)
+├── service.yaml                    # users-api — expose port
+├── postgres-deployment.yaml        # postgres pod
+├── postgres-service.yaml           # postgres — internal DNS
+├── postgres-secret.yaml            # DB credentials
+├── node-frontend-deployment.yaml   # Node.js frontend
+├── node-frontend-service.yaml
+└── node-frontend-secret.yaml       # Auth0 credentials
+```
+
+**กฎง่ายๆ ว่าอะไรควรอยู่ใน project:**
+
+| คำถาม | ตัวอย่าง | อยู่ใน project? |
+|---|---|---|
+| เปลี่ยนตาม code/requirement? | users-api, frontend | ✅ |
+| เป็น dependency ของ app? | postgres | ✅ |
+| มี secret ของ app? | Auth0, DB password | ✅ |
+| เป็น infrastructure ส่วนกลาง? | Prometheus, Grafana | ❌ ใช้ Helm |
+| ทุก project ใช้ร่วมกัน? | ingress-nginx, cert-manager | ❌ ใช้ Helm |
+
+---
+
+### อะไรเป็น Infrastructure (ติดตั้งครั้งเดียวผ่าน Helm)
+
+Prometheus, Grafana, Loki ติดตั้งครั้งเดียวบน AKS ผ่าน Helm — ไม่เกี่ยวกับ code โปรเจค
+
+```
+Jenkins agent VM
+    │
+    │  helm install (ทำครั้งเดียว manually)
+    │
+    ▼
+AKS cluster
+    ├── namespace: monitoring
+    │       ├── prometheus pod  ← รันตลอด ไม่ต้อง deploy ใหม่
+    │       ├── grafana pod
+    │       ├── loki pod
+    │       └── promtail pod
+    └── namespace: users-api
+            ├── users-api pod   ← deploy ใหม่ทุกครั้งที่ code เปลี่ยน
+            ├── node-frontend pod
+            └── postgres pod
+```
+
+**ทำไมไม่เพิ่มใน Jenkinsfile:**
+- `helm install` ซ้ำทุก build → error "already exists"
+- Grafana dashboard ที่ save ไว้จะหาย
+- ช้าขึ้นทุก build โดยไม่จำเป็น
+
+---
+
+### Helm คืออะไร
+
+Helm คือ **package manager สำหรับ Kubernetes** — เหมือน `apt install` บน Linux
+
+```bash
+# แทนที่จะเขียน yaml 50+ ไฟล์เอง
+helm install monitoring prometheus-community/kube-prometheus-stack -n monitoring
+# Helm จะ download yaml สำเร็จรูป + kubectl apply ให้อัตโนมัติ
+```
+
+เทียบกับที่เราทำใน Jenkinsfile:
+```bash
+# เราทำเอง (yaml ที่เขียนเอง)
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/service.yaml
+
+# Helm ทำแทน (yaml สำเร็จรูปจาก internet)
+helm install monitoring prometheus-community/kube-prometheus-stack
+```
+
+---
+
+### อะไรต้องมีใน Project เพื่อใช้ร่วมกับ Infrastructure
+
+แม้ Prometheus/Grafana/Loki จะเป็น infrastructure แต่โปรเจคต้องเตรียมฝั่งตัวเองด้วย:
+
+| สิ่งที่ต้องทำในโปรเจค | ที่ไหน | ทำไม |
+|---|---|---|
+| เพิ่ม `micrometer-registry-prometheus` | `pom.xml` | Spring Boot expose `/actuator/prometheus` |
+| เปิด prometheus endpoint | `application.yaml` | ให้ Prometheus scrape ได้ |
+| เพิ่ม annotations | `k8s/deployment.yaml` | บอก Prometheus ว่า scrape ที่ไหน |
+| เพิ่ม `prom-client` | `node-frontend/package.json` | Node.js expose `/metrics` |
+| เขียน `/metrics` endpoint | `node-frontend/server.js` | expose HTTP metrics |
+
+Promtail collect logs อัตโนมัติจากทุก pod — **ไม่ต้องแตะ code เลย**
+
+---
+
+### Flow ของ Metrics และ Logs
+
+```
+Spring Boot pod          Node.js pod
+  /actuator/prometheus     /metrics
+        ↑                     ↑
+        └──────────┬──────────┘
+                   │ scrape ทุก 15s (ตาม annotations)
+              Prometheus
+                   │
+              Grafana Dashboard
+                   │
+            แสดง graph/alert
+
+pods (ทุกตัว)
+  stdout/stderr logs
+        ↑
+     Promtail (collect อัตโนมัติ)
+        │
+      Loki
+        │
+   Grafana → ค้นหา logs
+```
