@@ -18,6 +18,9 @@ spring:
   flyway:
     enabled: true
 
+  cache:
+    type: simple  # ใช้ in-memory cache ตอน test แทน Redis จริง
+
 auth0:
   audience: https://users-api
   allowed-emails:
