@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: update-fullnames
+  namespace: __NAMESPACE__
+spec:
+  schedule: "*/15 * * * *"        # รันทุก 15 นาที (cron syntax)
+  concurrencyPolicy: Forbid        # ถ้า job ก่อนหน้ายังไม่เสร็จ ไม่สร้าง job ใหม่
+  successfulJobsHistoryLimit: 3    # เก็บ history job ที่ success ไว้ 3 อัน
+  failedJobsHistoryLimit: 3        # เก็บ history job ที่ fail ไว้ 3 อัน
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure  # ถ้า fail ให้ retry
+          containers:
+          - name: batch-caller
+            image: curlimages/curl:latest   # lightweight image แค่มี curl
+            command:
+              - curl
+              - -s
+              - -o
+              - /dev/null
+              - -w
+              - "%{http_code}"
+              - -X
+              - POST
+              - http://users-api.__NAMESPACE__.svc.cluster.local/api/v1/users/batch/update-names

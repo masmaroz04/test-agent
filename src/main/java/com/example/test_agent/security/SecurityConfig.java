@@ -31,6 +31,7 @@ public class SecurityConfig {
         http
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health/**", "/actuator/prometheus").permitAll()
+                .requestMatchers("/api/v1/users/batch/**").permitAll()  // K8s CronJob internal call
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2

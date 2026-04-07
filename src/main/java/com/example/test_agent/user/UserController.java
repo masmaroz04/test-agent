@@ -9,6 +9,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -40,5 +41,13 @@ public class UserController {
     public User getUserById(@PathVariable Long id, @AuthenticationPrincipal Jwt jwt) {
         log.info("[/api/v1/users/{}] GET by id — caller={}", id, jwt.getSubject());
         return userService.getById(id);
+    }
+
+    // เรียกจาก K8s CronJob — ไม่ต้องการ auth (internal call จาก cluster)
+    @PostMapping("/batch/update-names")
+    public String batchUpdateNames() {
+        int seq = userService.updateAllFullNames();
+        log.info("[/api/v1/users/batch/update-names] POST — updated to xxxx{}", String.format("%04d", seq));
+        return "updated to xxxx" + String.format("%04d", seq);
     }
 }

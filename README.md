@@ -2062,4 +2062,109 @@ env:
 2. Deploy Redis       → รอ ready   ← เพิ่มใหม่
 3. Deploy users-api   → รอ ready
 4. Deploy node-frontend
+5. Deploy CronJob     → kubectl apply  ← เพิ่มใหม่
+```
+
+---
+
+## 27. K8s CronJob — Batch Update fullName
+
+### ทำไมต้องใช้ CronJob แทน @Scheduled
+
+| | `@Scheduled` (Spring) | K8s CronJob |
+|---|---|---|
+| 5 replicas | รัน 5 ครั้งพร้อมกัน ⚠️ | รันครั้งเดียว ✓ |
+| app crash | job หยุดด้วย | K8s ยังจัดการ schedule ได้ |
+| ดู history | ไม่มี | `kubectl get jobs` ✓ |
+| retry อัตโนมัติ | ไม่มี | `restartPolicy: OnFailure` ✓ |
+
+**K8s CronJob เหมาะกับ production** เพราะ K8s เป็นคนจัดการ schedule — ไม่ขึ้นกับว่า app replica มีกี่ตัว
+
+### Flow การทำงาน
+
+```
+K8s CronJob (ทุก 15 นาที)
+  └── สร้าง Job
+        └── สร้าง Pod (curlimages/curl)
+              └── POST http://users-api.users-api.svc.cluster.local/api/v1/users/batch/update-names
+                    └── users-api Pod (ตัวใดตัวหนึ่ง — LoadBalancer เลือกเอง)
+                          └── update fullName ทุก user → xxxx0001, xxxx0002, ...
+                                └── evict Redis cache
+              └── Pod ตายไปหลังรันเสร็จ
+```
+
+### ไฟล์ที่เพิ่ม/แก้
+
+```
+k8s/cronjob.yaml                          ← CronJob definition
+src/.../user/UserController.java           ← เพิ่ม POST /api/v1/users/batch/update-names
+src/.../user/UserService.java              ← เพิ่ม updateAllFullNames()
+src/.../security/SecurityConfig.java       ← whitelist /api/v1/users/batch/**
+Jenkinsfile                                ← deploy cronjob.yaml
+```
+
+### อธิบาย cronjob.yaml
+
+```yaml
+schedule: "*/15 * * * *"       # cron syntax — ทุก 15 นาที
+                                # format: นาที ชั่วโมง วัน เดือน วันในสัปดาห์
+                                # */15 = ทุก 15 นาที (0, 15, 30, 45)
+
+concurrencyPolicy: Forbid       # ถ้า job ก่อนหน้ายังรันอยู่ → ไม่สร้าง job ใหม่
+                                # ป้องกัน job ทับซ้อนกัน
+
+successfulJobsHistoryLimit: 3   # เก็บ Pod history ที่ success ไว้ 3 อัน
+failedJobsHistoryLimit: 3       # เก็บ Pod history ที่ fail ไว้ 3 อัน
+                                # ใช้ดู log ย้อนหลังได้
+
+restartPolicy: OnFailure        # ถ้า curl fail (non-zero exit) → K8s retry อัตโนมัติ
+
+image: curlimages/curl:latest   # lightweight image ที่มีแค่ curl
+                                # ไม่ต้อง build image ใหม่ — ใช้ public image ได้เลย
+
+http://users-api.__NAMESPACE__.svc.cluster.local
+# DNS ภายใน K8s cluster
+# format: <service-name>.<namespace>.svc.cluster.local
+# ไม่ต้องผ่าน internet — call ตรงใน cluster
+```
+
+### ทำไม endpoint นี้ไม่ต้อง Auth
+
+```java
+// SecurityConfig.java
+.requestMatchers("/api/v1/users/batch/**").permitAll()
+```
+
+CronJob รันใน cluster เดียวกัน — ไม่ได้รับ JWT token จาก Auth0
+เพราะฉะนั้น whitelist ได้เลย โดย endpoint นี้ไม่ expose ออก internet
+(users-api Service เป็น LoadBalancer แต่ CronJob เรียกผ่าน internal DNS ตรง)
+
+### ต้อง Setup อะไรเพิ่มใน Azure ไหม
+
+**ไม่ต้องตั้งค่าอะไรเพิ่มใน Azure เลย** เพราะ:
+
+- CronJob เป็น K8s resource — AKS รองรับอยู่แล้ว
+- `curlimages/curl` เป็น public image จาก Docker Hub — pull ได้เลย
+- ไม่ต้องเปิด NSG rule เพิ่ม เพราะเป็น internal cluster call
+- ไม่ต้องตั้ง Azure Scheduler หรือ Logic App แยก
+
+**Jenkins deploy ครั้งเดียวก็ใช้ได้เลย:**
+```
+kubectl apply -f k8s/cronjob.yaml
+```
+
+### ดู CronJob และ Job History
+
+```bash
+# ดู CronJob ที่มีอยู่
+kubectl -n users-api get cronjobs
+
+# ดู Job ที่รันไปแล้ว
+kubectl -n users-api get jobs
+
+# ดู log ของ job ล่าสุด
+kubectl -n users-api logs job/$(kubectl -n users-api get jobs --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}')
+
+# รัน job ทันที (ไม่ต้องรอ 15 นาที) — ใช้ตอน test
+kubectl -n users-api create job test-batch --from=cronjob/update-fullnames
 ```
